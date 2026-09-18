@@ -284,12 +284,11 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     setState(() => _selected = null);
     try {
     final events = battle.castUltimate();
-    fx.triggerSlash();
+    fx.triggerUltimate();
     fx.lunge();
-    fx.shakeBy(24);
-    fx.flashEnemy();
+    fx.shakeBy(26);
     _presentEnemyEvents(events);
-    await _pause(0.42);
+    await _pause(0.5);
 
     final steps = board.resolveUltimate(board.index(BoardEngine.cols ~/ 2, BoardEngine.rows ~/ 2));
     await _playSteps(steps, multiplier: Campaign.player.ultimateMultiplier);
@@ -346,12 +345,18 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         return true;
       }());
 
+      // 先按宝石类型打出对应的攻击演出，再结算伤害——先看到"打出去"，
+      // 再看到"打中了"，节奏比数字直接跳出来有打击感得多。
+      _presentStepStrikes(step);
       final events = battle.applyClear(
         step.counts,
         combo: step.combo,
         specialBonus: step.specialBonus,
         multiplier: multiplier,
       );
+      if (events.any((e) => e.kind == CombatEventKind.playerDamage)) {
+        await _pause(0.09 * pace);
+      }
       _presentEnemyEvents(events);
       _presentPlayerEvents(events);
       _refresh();
@@ -392,7 +397,16 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (incoming.isNotEmpty) {
       fx.lunge();
       await _pause(0.20);
-      fx.shakeBy(18);
+      // 敌人出手：爪痕落在玩家一侧 + 全屏震动 + 边缘红闪
+      final hit = incoming.first.amount;
+      fx.addStrike(
+        StrikeKind.enemyHit,
+        count: hit ~/ 20,
+        ny: 0.86,
+        nx: 0.5,
+      );
+      fx.hitStop = 0.06;
+      fx.shakeBy(20);
       fx.playerFlash = 1;
       _presentPlayerEvents(events);
       await _pause(0.30);
@@ -447,12 +461,39 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   // ------------------------------------------------------------------ 飘字
 
+  /// 按这一步消除的宝石种类打出对应的攻击演出。
+  void _presentStepStrikes(CascadeStep step) {
+    final counts = step.counts;
+    final reds = counts[GemType.red] ?? 0;
+    final yellows = counts[GemType.yellow] ?? 0;
+    final purples = counts[GemType.purple] ?? 0;
+    final greens = counts[GemType.green] ?? 0;
+    final blues = counts[GemType.blue] ?? 0;
+
+    if (reds > 0) {
+      fx.addStrike(StrikeKind.sword, count: reds, ny: 0.52);
+    }
+    if (yellows > 0) {
+      fx.addStrike(StrikeKind.lightning, count: yellows, ny: 0.50);
+    }
+    if (purples > 0) {
+      fx.addStrike(StrikeKind.curse, count: purples, ny: 0.58);
+    }
+    // 玩家一侧的特效放在战斗区偏下的位置，留出空间不被下边缘裁掉
+    if (greens > 0) {
+      fx.addStrike(StrikeKind.heal, count: greens, ny: 0.82);
+    }
+    if (blues > 0) {
+      fx.addStrike(StrikeKind.shield, count: blues, ny: 0.84);
+    }
+  }
+
   void _presentEnemyEvents(List<CombatEvent> events) {
     final damage = events
         .where((e) => e.kind == CombatEventKind.playerDamage || e.kind == CombatEventKind.special)
         .fold(0, (sum, e) => sum + e.amount);
     if (damage > 0) {
-      fx.flashEnemy();
+      fx.hitImpact(damage: damage);
       fx.addFloat('- $damage', Palette.hpEnemy, ny: 0.50, size: 34);
       fx.shakeBy(3 + damage * 0.03);
     }

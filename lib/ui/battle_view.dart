@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../engine/battle.dart';
 import '../engine/gem.dart';
 import '../engine/levels.dart';
+import 'combat_art.dart';
 import 'enemy_art.dart';
 import 'fx.dart';
 import 'hud.dart';
@@ -176,7 +177,8 @@ class _BattlePainter extends CustomPainter {
     _paintBackground(canvas, rect);
     _paintMotes(canvas, size);
     _paintCharacter(canvas, size);
-    _paintSlash(canvas, size);
+    CombatArt.paintStrikes(canvas, size, fx.strikes);
+    if (fx.ultimate != null) CombatArt.paintUltimate(canvas, size, fx.ultimate!);
     _paintFloats(canvas, size);
   }
 
@@ -259,43 +261,12 @@ class _BattlePainter extends CustomPainter {
         hpRatio: battle.enemyHpRatio,
         hitFlash: fx.enemyFlash,
         lunge: fx.enemyLunge,
+        recoil: fx.enemyRecoil,
         enraged: battle.enraged,
         dissolve: fx.dissolve,
       ),
     );
     canvas.restore();
-  }
-
-  void _paintSlash(Canvas canvas, Size size) {
-    final slash = fx.slash;
-    if (slash == null) return;
-    final t = slash.t;
-    for (var i = 0; i < 3; i++) {
-      final delay = i * 0.10;
-      final local = ((t - delay) / (1 - delay)).clamp(0.0, 1.0);
-      if (local <= 0) continue;
-      final alpha = math.sin(local * math.pi);
-      final x = -size.width * 0.4 + local * size.width * 1.8;
-      final start = Offset(x - size.width * 0.25, size.height);
-      final end = Offset(x + size.width * 0.25, size.height * 0.05);
-      canvas.drawLine(
-        start,
-        end,
-        Paint()
-          ..strokeWidth = size.width * 0.11
-          ..strokeCap = StrokeCap.round
-          ..color = slash.color.withValues(alpha: alpha * 0.35)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, size.width * 0.05),
-      );
-      canvas.drawLine(
-        start,
-        end,
-        Paint()
-          ..strokeWidth = size.width * 0.02
-          ..strokeCap = StrokeCap.round
-          ..color = Colors.white.withValues(alpha: alpha * 0.95),
-      );
-    }
   }
 
   void _paintFloats(Canvas canvas, Size size) {

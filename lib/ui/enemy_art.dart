@@ -17,6 +17,9 @@ class EnemyPose {
   /// 出手时的前冲姿态 0~1。
   final double lunge;
 
+  /// 受击后仰强度 0~1：被击中时整个人向后一顿。
+  final double recoil;
+
   /// 是否处于狂暴。
   final bool enraged;
 
@@ -28,6 +31,7 @@ class EnemyPose {
     required this.hpRatio,
     this.hitFlash = 0,
     this.lunge = 0,
+    this.recoil = 0,
     this.enraged = false,
     this.dissolve = 0,
   });
@@ -74,6 +78,14 @@ class EnemyArt {
 
     canvas.save();
     canvas.translate(cx, breath + shift);
+
+    // 受击后仰：整体后撤一点、轻微倾斜，配合白闪读出"被打中"的顿挫
+    if (pose.recoil > 0.01) {
+      final r = pose.recoil;
+      canvas.translate(0, -h * 0.020 * r);
+      canvas.rotate(0.022 * r * math.sin(t * 26));
+      canvas.scale(1 - 0.022 * r);
+    }
 
     final hair = _buildHair(w, h, t, pose, back: true);
     final body = _buildBody(w, h, t, pose);
@@ -631,11 +643,12 @@ class EnemyArt {
     canvas.drawOval(
       faceRect,
       Paint()
-        ..shader = ui.Gradient.linear(faceRect.topCenter, faceRect.bottomCenter, [
-          const Color(0xFFFBEFF4),
-          const Color(0xFFE0C2D4),
-          const Color(0xFFA9859F),
-        ]),
+        ..shader = ui.Gradient.linear(
+          faceRect.topCenter,
+          faceRect.bottomCenter,
+          const [Color(0xFFFBEFF4), Color(0xFFE0C2D4), Color(0xFFA9859F)],
+          const [0.0, 0.45, 1.0],
+        ),
     );
 
     final blink = math.sin(t * 0.85) > 0.965 ? 0.12 : 1.0;

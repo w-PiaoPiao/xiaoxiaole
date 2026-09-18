@@ -163,12 +163,64 @@ class FloatText {
   });
 }
 
-/// 必杀技的斩击特效进度。
-class SlashFx {
+/// 打击特效类型：不同宝石打出的攻击有各自的视觉语言，
+/// 让玩家一眼看出"这一下是什么打的"。
+enum StrikeKind {
+  /// 红色 · 交叉双剑：两道剑气交叉斩过敌人
+  sword,
+
+  /// 黄色 · 闪电：从天而降的落雷
+  lightning,
+
+  /// 紫色 · 骷髅：诅咒印记烙在敌人身上
+  curse,
+
+  /// 绿色 · 十字：治疗十字与上升的光点（作用在玩家一侧）
+  heal,
+
+  /// 蓝色 · 盾牌：护盾成型（作用在玩家一侧）
+  shield,
+
+  /// 敌人命中玩家：红色爪痕划过玩家一侧
+  enemyHit,
+}
+
+/// 一次打击特效。坐标是战斗区内的归一化坐标。
+class StrikeFx {
+  final StrikeKind kind;
+  final double nx;
+  final double ny;
+
+  /// 强度 0.7~1.7，由这一次消除的宝石数量决定：消得越多，打得越狠。
+  final double power;
+
+  /// 用于生成稳定的随机形状（闪电走向等）。
+  final int seed;
+
   double t = 0;
   final double duration;
-  final Color color;
-  SlashFx({this.duration = 0.7, this.color = Palette.gold});
+
+  StrikeFx({
+    required this.kind,
+    required this.seed,
+    this.nx = 0.5,
+    this.ny = 0.52,
+    this.power = 1.0,
+    this.duration = 0.5,
+  });
+}
+
+/// 必杀技「斩月」：一道月牙形剑气横贯战场。
+class UltimateFx {
+  double t = 0;
+  final double duration;
+
+  /// 月牙的起始角，每次释放略有不同，避免看腻。
+  final double tilt;
+
+  UltimateFx({this.duration = 0.85, this.tilt = 0});
+
+  static double randomTilt(math.Random rng) => (rng.nextDouble() - 0.5) * 0.5;
 }
 
 /// 所有动画与特效的统一驱动器。
@@ -183,7 +235,15 @@ class FxController extends ChangeNotifier {
   final List<BoardLabel> labels = [];
   final List<FloatText> floats = [];
 
-  SlashFx? slash;
+  final List<StrikeFx> strikes = [];
+
+  UltimateFx? ultimate;
+
+  /// 命中定格剩余时间：>0 时时间几乎停住，制造打击停顿。
+  double hitStop = 0;
+
+  /// 敌人受击后仰强度 0~1。
+  double enemyRecoil = 0;
 
   /// 屏幕震动强度（像素）。
   double shake = 0;
@@ -234,6 +294,12 @@ class FxController extends ChangeNotifier {
   // ------------------------------------------------------------------ 每帧推进
 
   void tick(double dt) {
+    // 命中定格：命中瞬间把时间放慢到 1/10，形成"顿一下"的打击感。
+    // 注意先用真实 dt 扣减，否则定格永远退不掉。
+    if (hitStop > 0) {
+      hitStop = math.max(0, hitStop - dt);
+      dt *= 0.1;
+    }
     time += dt;
     for (final gem in gems.values) {
       if (gem.t < 1) {
@@ -279,14 +345,20 @@ class FxController extends ChangeNotifier {
     }
     floats.removeWhere((f) => f.t >= 1);
 
-    final s = slash;
-    if (s != null) {
-      s.t = math.min(1, s.t + dt / s.duration);
-      if (s.t >= 1) slash = null;
+    for (final strike in strikes) {
+      strike.t = math.min(1, strike.t + dt / strike.duration);
+    }
+    strikes.removeWhere((s) => s.t >= 1);
+
+    final ult = ultimate;
+    if (ult != null) {
+      ult.t = math.min(1, ult.t + dt / ult.duration);
+      if (ult.t >= 1) ultimate = null;
     }
 
     enemyFlash = math.max(0, enemyFlash - dt * 2.6);
     enemyLunge = math.max(0, enemyLunge - dt * 1.6);
+    enemyRecoil = math.max(0, enemyRecoil - dt * 3.4);
     playerFlash = math.max(0, playerFlash - dt * 2.2);
     if (dissolveTarget > dissolve) {
       dissolve = math.min(dissolveTarget, dissolve + dt * 0.7);
@@ -464,8 +536,38 @@ class FxController extends ChangeNotifier {
     ));
   }
 
-  void triggerSlash() {
-    slash = SlashFx();
+  /// 打出一次打击特效。[count] 是这次消除的宝石数量，决定力度。
+  void addStrike(StrikeKind kind, {int count = 3, double nx = 0.5, double ny = 0.52}) {
+    strikes.add(StrikeFx(
+      kind: kind,
+      seed: _rng.nextInt(1 << 20),
+      nx: nx + (_rng.nextDouble() - 0.5) * 0.06,
+      ny: ny + (_rng.nextDouble() - 0.5) * 0.04,
+      power: (0.72 + count * 0.085).clamp(0.72, 1.7),
+      duration: switch (kind) {
+        StrikeKind.lightning => 0.34,
+        StrikeKind.sword => 0.46,
+        StrikeKind.curse => 0.62,
+        StrikeKind.heal => 0.7,
+        StrikeKind.shield => 0.6,
+        StrikeKind.enemyHit => 0.5,
+      },
+    ));
+  }
+
+  /// 命中：白闪 + 后仰 + 定格。[damage] 越大打得越重。
+  void hitImpact({required int damage}) {
+    final weight = (0.55 + damage / 220).clamp(0.55, 1.5);
+    hitStop = math.max(hitStop, 0.05 * weight);
+    enemyRecoil = math.min(1.0, enemyRecoil + 0.55 * weight);
+    enemyFlash = 1;
+  }
+
+  void triggerUltimate() {
+    ultimate = UltimateFx(tilt: UltimateFx.randomTilt(_rng));
+    hitStop = math.max(hitStop, 0.09);
+    enemyRecoil = 1;
+    enemyFlash = 1;
   }
 
   /// 重开一局时清空所有视觉状态。
@@ -476,7 +578,10 @@ class FxController extends ChangeNotifier {
     rings.clear();
     labels.clear();
     floats.clear();
-    slash = null;
+    ultimate = null;
+    strikes.clear();
+    hitStop = 0;
+    enemyRecoil = 0;
     shake = 0;
     enemyFlash = 0;
     enemyLunge = 0;

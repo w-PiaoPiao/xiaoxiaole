@@ -436,6 +436,8 @@ class GemArt {
                 Color(0xFFC08CFF),
                 Color(0xFFFF6B6B),
               ],
+              // 颜色数超过 2 时必须显式给出 stop，否则 dart:ui 会抛异常
+              const [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
             ),
         );
         canvas.restore();
