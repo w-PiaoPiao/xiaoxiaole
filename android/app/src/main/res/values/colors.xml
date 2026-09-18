@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动闪屏背景：与游戏主色调一致，避免暗色游戏前先闪一下白屏 -->
+    <color name="launch_background">#FF06040C</color>
+</resources>
