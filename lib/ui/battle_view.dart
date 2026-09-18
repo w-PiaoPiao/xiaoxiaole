@@ -228,12 +228,12 @@ class _BattlePainter extends CustomPainter {
       if (y < 0) y += 1.0;
       final x = r1 * size.width + math.sin(fx.time * 0.5 + i) * 10;
       final alpha = (0.10 + 0.30 * r1) * (1 - fx.dissolve * 0.5);
+      // 几十颗浮尘逐个模糊在软件渲染下太贵，用淡淡的圆点即可
       canvas.drawCircle(
         Offset(x, y * size.height),
-        0.8 + r1 * 1.9,
+        1.0 + r1 * 2.1,
         Paint()
-          ..color = Color.lerp(theme, Colors.white, 0.4)!.withValues(alpha: alpha)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.2),
+          ..color = Color.lerp(theme, Colors.white, 0.4)!.withValues(alpha: alpha * 0.75),
       );
     }
   }

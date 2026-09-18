@@ -296,15 +296,15 @@ class _BoardPainter extends CustomPainter {
         : gem.scale;
     final rect = Rect.fromLTWH(gx * cell, gy * cell, cell, cell).deflate(cell * 0.10);
 
+    // 投影刻意不用 MaskFilter：每帧 64 颗宝石各一次模糊，在软件渲染的
+    // 模拟器上会把帧率打到个位数，得不偿失。
     canvas.drawOval(
       Rect.fromCenter(
-        center: Offset(rect.center.dx, rect.bottom + cell * 0.05),
-        width: rect.width * 0.62,
-        height: rect.height * 0.2,
+        center: Offset(rect.center.dx, rect.bottom + cell * 0.035),
+        width: rect.width * 0.70,
+        height: rect.height * 0.16,
       ),
-      Paint()
-        ..color = Colors.black.withValues(alpha: 0.34 * gem.alpha)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, cell * 0.07),
+      Paint()..color = Colors.black.withValues(alpha: 0.26 * gem.alpha),
     );
 
     GemArt.paint(

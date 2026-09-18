@@ -44,6 +44,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   Duration _lastTick = Duration.zero;
   double _sinceCheck = 0;
+  double _busyElapsed = 0;
   bool _disposed = false;
 
   @override
@@ -66,7 +67,24 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     final dt = (elapsed - _lastTick).inMicroseconds / 1e6;
     _lastTick = elapsed;
     if (dt <= 0) return;
-    fx.tick(dt.clamp(0.0, 0.05));
+    // 上限放到 0.12 秒：低帧率设备上动画仍能跟上真实时间。钳得太死会让
+    // 动画时间以远低于真实时间的速度流逝，连锁看起来就像卡住了。
+    fx.tick(dt.clamp(0.0, 0.12));
+
+    // 定局兜底：胜负已定却迟迟没弹出结算（长连锁、低帧率都可能把序列拖住），
+    // 直接补结算并放开操作。只在 battle.isOver 时生效，不可能打断正常对局。
+    if (_busy) {
+      _busyElapsed += dt;
+      if (_busyElapsed > 6.0 && battle.isOver) {
+        _busyElapsed = 0;
+        _busy = false;
+        _handleBattleEnd();
+        _ensureVisualSync('定局兜底');
+        _refresh();
+      }
+    } else {
+      _busyElapsed = 0;
+    }
 
     // 空闲时每秒自检一次：
     //  - 战斗已经结束却没弹出结算面板（任何原因漏结算），立刻补上，绝不把玩家
@@ -290,6 +308,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   Future<void> _playSteps(List<CascadeStep> steps, {double multiplier = 1.0}) async {
     for (final step in steps) {
       if (_disposed) return;
+      // 胜负已定（例如击杀 BOSS 的那一下带出的后续连锁）：动画提速，
+      // 让玩家尽快看到结算，而不是干等一段已经无关紧要的连锁演完。
+      final pace = battle.isOver ? 0.3 : 1.0;
 
       if (step.activations.isNotEmpty) {
         for (final activation in step.activations) {
@@ -308,7 +329,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           size: 32,
         );
       }
-      await _pause(0.12);
+      await _pause(0.12 * pace);
 
       fx.applySnapshot(
         step.snapshot,
@@ -352,9 +373,11 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         }
       }
 
-      await fx.settle();
+      // 等宝石落位，但给一个很短的上限：动画只是表现，引擎那边早已算完，
+      // 绝不能让一段长连锁把玩家晾在那里。
+      await fx.settle(timeout: Duration(milliseconds: (420 * pace).round()));
       if (_disposed) return;
-      await _pause(0.04);
+      await _pause(0.04 * pace);
     }
   }
 

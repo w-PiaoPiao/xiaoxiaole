@@ -269,7 +269,6 @@ class EnemyArt {
           ],
           const [0.0, 0.45, 1.0],
         )
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.6),
     );
 
     // 内侧提亮，给剪影一点厚度
