@@ -18,11 +18,18 @@ class BattleView extends StatelessWidget {
   final FxController fx;
   final LevelDef level;
 
+  /// 右上角的两个入口。做成悬浮层而不是占位控件：标题行的高度不变，
+  /// 下方留给角色的空间也就不受影响。
+  final VoidCallback? onHelp;
+  final VoidCallback? onMenu;
+
   const BattleView({
     super.key,
     required this.battle,
     required this.fx,
     required this.level,
+    this.onHelp,
+    this.onMenu,
   });
 
   @override
@@ -31,6 +38,8 @@ class BattleView extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
+        // 背景渐变、光晕与暗角是静态的，单独一层，只在换关换色时重绘。
+        CustomPaint(painter: _BattleBackdropPainter(theme: theme)),
         RepaintBoundary(
           child: CustomPaint(
             painter: _BattlePainter(
@@ -56,6 +65,32 @@ class BattleView extends StatelessWidget {
             ),
           ),
         ),
+        if (onHelp != null || onMenu != null)
+          Positioned(
+            top: 0,
+            right: 12,
+            child: SafeArea(
+              bottom: false,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (onHelp != null)
+                    _HeaderButton(
+                      icon: Icons.menu_book_outlined,
+                      tooltip: '玩法说明',
+                      onTap: onHelp!,
+                    ),
+                  if (onHelp != null && onMenu != null) const SizedBox(width: 8),
+                  if (onMenu != null)
+                    _HeaderButton(
+                      icon: Icons.tune,
+                      tooltip: '菜单与设置',
+                      onTap: onMenu!,
+                    ),
+                ],
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -70,28 +105,12 @@ class BattleView extends StatelessWidget {
             level.enemy.name,
             style: AppText.enemyName,
             overflow: TextOverflow.ellipsis,
+            maxLines: 1,
           ),
         ),
-        const Spacer(),
-        if (battle.enraged)
-          const Padding(
-            padding: EdgeInsets.only(left: 4),
-            child: Tag(text: '狂暴', color: Palette.danger, dense: true),
-          ),
-        if (battle.curseStacks > 0)
-          Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: Tag(
-              text: '易伤 x${battle.curseStacks}',
-              color: Palette.gem(GemType.purple),
-              dense: true,
-            ),
-          ),
-        if (battle.healBlockTurns > 0)
-          const Padding(
-            padding: EdgeInsets.only(left: 4),
-            child: Tag(text: '禁疗', color: Color(0xFFE85A7A), dense: true),
-          ),
+        // 右侧这条留白是给悬浮的入口按钮的：状态标签已经从这一行挪走，
+        // 无论敌人挂了多少 debuff 都不会再和按钮叠在一起。
+        const SizedBox(width: 96),
       ],
     );
   }
@@ -101,23 +120,50 @@ class BattleView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        EnergyBar(
+          value: battle.enemyHpRatio,
+          shieldValue: shieldRatio,
+          color: Palette.hpEnemy,
+          height: 15,
+          trailing: '${battle.enemyHp}',
+          // 狂暴线：让"什么时候会变天"变成看得见的信息，而不是突然袭击。
+          markers: battle.def.enrages ? [battle.def.enrageAt] : const [],
+          semanticLabel: '${battle.def.name} 生命 ${battle.enemyHp} / ${battle.def.maxHp}',
+        ),
+        const SizedBox(height: 4),
+        // 状态标签原本挂在标题行右侧，会和右上角的按钮抢位置；
+        // 挪到副标题这一行后既不会重叠，也不占额外高度。
         Row(
           children: [
-            Expanded(
-              child: EnergyBar(
-                value: battle.enemyHpRatio,
-                shieldValue: shieldRatio,
-                color: Palette.hpEnemy,
-                height: 15,
-                trailing: '${battle.enemyHp}',
+            Flexible(
+              child: Text(
+                level.enemy.title,
+                style: AppText.subtitle.copyWith(color: theme.withValues(alpha: 0.85)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
+            const Spacer(),
+            if (battle.enraged)
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
+                child: Tag(text: '狂暴', color: Palette.danger, dense: true),
+              ),
+            if (battle.curseStacks > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Tag(
+                  text: '易伤 x${battle.curseStacks}',
+                  color: Palette.gem(GemType.purple),
+                  dense: true,
+                ),
+              ),
+            if (battle.healBlockTurns > 0)
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
+                child: Tag(text: '禁疗', color: Color(0xFFE85A7A), dense: true),
+              ),
           ],
-        ),
-        const SizedBox(height: 3),
-        Text(
-          level.enemy.title,
-          style: AppText.subtitle.copyWith(color: theme.withValues(alpha: 0.85)),
         ),
       ],
     );
@@ -128,20 +174,21 @@ class BattleView extends StatelessWidget {
     final color = danger ? Palette.danger : Palette.textDim;
     return Row(
       children: [
-        AnimatedBuilder(
-          animation: fx,
-          builder: (context, _) => TurnPips(
-            total: battle.def.turnsPerAttack,
-            remaining: battle.turnsToAttack,
-            color: color,
-            danger: danger,
-            phase: fx.time,
-          ),
+        // 只在敌方即将出手时，这排圆点才自己动起来。
+        TurnPips(
+          total: battle.def.turnsPerAttack,
+          remaining: battle.turnsToAttack,
+          color: color,
+          danger: danger,
         ),
         const SizedBox(width: 8),
-        Text(
-          danger ? '敌方即将出手' : '距离敌方行动 ${battle.turnsToAttack} 回合',
-          style: AppText.label.copyWith(color: color),
+        Flexible(
+          child: Text(
+            danger ? '敌方即将出手' : '距离敌方行动 ${battle.turnsToAttack} 回合',
+            style: AppText.label.copyWith(color: color),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         const Spacer(),
         if (danger)
@@ -153,6 +200,95 @@ class BattleView extends StatelessWidget {
       ],
     );
   }
+}
+
+/// 标题行右侧的小圆角按钮。比 Material 默认的 48 更贴合战斗区，
+/// 但仍保留 [IconButton] 的 tooltip 与读屏语义。
+class _HeaderButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _HeaderButton({required this.icon, required this.tooltip, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onTap,
+      icon: Icon(icon, size: 19),
+      tooltip: tooltip,
+      color: Palette.textDim,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      style: IconButton.styleFrom(
+        backgroundColor: Palette.panel.withValues(alpha: 0.78),
+        side: const BorderSide(color: Palette.panelEdge),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(11)),
+      ),
+    );
+  }
+}
+
+/// 战斗区的静态背景：渐变、主题光晕与暗角。与动画无关，只在换关时重绘。
+class _BattleBackdropPainter extends CustomPainter {
+  final Color theme;
+
+  _BattleBackdropPainter({required this.theme});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Palette.bgTop, Palette.bgMid, Palette.bgDeep],
+          stops: [0.0, 0.5, 1.0],
+        ).createShader(rect),
+    );
+
+    final glowCenter = Offset(rect.width * 0.5, rect.height * 0.58);
+    final glowRadius = rect.width * 0.78;
+    canvas.drawCircle(
+      glowCenter,
+      glowRadius,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            theme.withValues(alpha: 0.30),
+            theme.withValues(alpha: 0.10),
+            Colors.transparent,
+          ],
+          stops: const [0.0, 0.45, 1.0],
+        ).createShader(Rect.fromCircle(center: glowCenter, radius: glowRadius)),
+    );
+
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..shader = RadialGradient(
+          center: Alignment.center,
+          radius: 0.92,
+          colors: [Colors.transparent, Colors.black.withValues(alpha: 0.62)],
+          stops: const [0.5, 1.0],
+        ).createShader(rect),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _BattleBackdropPainter oldDelegate) =>
+      oldDelegate.theme != theme;
+}
+
+/// 浮尘的静态参数：位置与速度只取决于序号，构建一次即可。
+class _Mote {
+  final double r1;
+  final double r2;
+  final double speed;
+
+  const _Mote(this.r1, this.r2, this.speed);
 }
 
 class _BattlePainter extends CustomPainter {
@@ -171,10 +307,15 @@ class _BattlePainter extends CustomPainter {
     return v - v.floorToDouble();
   }
 
+  /// 预先算好每颗浮尘的随机量，避免每帧重复计算同样的三角函数。
+  static final List<_Mote> _motes = List.generate(34, (i) {
+    final r1 = _noise(i * 3 + 1);
+    final r2 = _noise(i * 7 + 5);
+    return _Mote(r1, r2, 0.012 + r1 * 0.03);
+  });
+
   @override
   void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    _paintBackground(canvas, rect);
     _paintMotes(canvas, size);
     _paintCharacter(canvas, size);
     CombatArt.paintStrikes(canvas, size, fx.strikes);
@@ -182,71 +323,34 @@ class _BattlePainter extends CustomPainter {
     _paintFloats(canvas, size);
   }
 
-  void _paintBackground(Canvas canvas, Rect rect) {
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Palette.bgTop, Palette.bgMid, Palette.bgDeep],
-          stops: [0.0, 0.5, 1.0],
-        ).createShader(rect),
-    );
-
-    final glowCenter = Offset(rect.width * 0.5, rect.height * 0.58);
-    canvas.drawCircle(
-      glowCenter,
-      rect.width * 0.78,
-      Paint()
-        ..shader = RadialGradient(
-          colors: [
-            theme.withValues(alpha: 0.30),
-            theme.withValues(alpha: 0.10),
-            Colors.transparent,
-          ],
-          stops: const [0.0, 0.45, 1.0],
-        ).createShader(Rect.fromCircle(center: glowCenter, radius: rect.width * 0.78)),
-    );
-
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = RadialGradient(
-          center: Alignment.center,
-          radius: 0.92,
-          colors: [Colors.transparent, Colors.black.withValues(alpha: 0.62)],
-          stops: const [0.5, 1.0],
-        ).createShader(rect),
-    );
-  }
-
   void _paintMotes(Canvas canvas, Size size) {
-    for (var i = 0; i < 34; i++) {
-      final r1 = _noise(i * 3 + 1);
-      final r2 = _noise(i * 7 + 5);
-      final speed = 0.012 + r1 * 0.03;
-      var y = (r2 - fx.time * speed) % 1.0;
-      if (y < 0) y += 1.0;
-      final x = r1 * size.width + math.sin(fx.time * 0.5 + i) * 10;
-      final alpha = (0.10 + 0.30 * r1) * (1 - fx.dissolve * 0.5);
+    final dot = Paint();
+    // 浮尘的基色只取决于主题色，先在循环外算好；整个战斗区每帧都在重绘，
+    // 循环里的 34 次 lerp 与 withValues 都是白花的。
+    final base = Color.lerp(theme, Colors.white, 0.4)!;
+    final fade = 1 - fx.dissolve * 0.5;
+    for (var i = 0; i < _motes.length; i++) {
+      final mote = _motes[i];
+      // Dart 对 double 的 % 是欧几里得取模，结果恒非负，不必再补一次。
+      final y = (mote.r2 - fx.time * mote.speed) % 1.0;
+      final x = mote.r1 * size.width + math.sin(fx.time * 0.5 + i) * 10;
+      final alpha = (0.10 + 0.30 * mote.r1) * fade;
       // 几十颗浮尘逐个模糊在软件渲染下太贵，用淡淡的圆点即可
       canvas.drawCircle(
         Offset(x, y * size.height),
-        1.0 + r1 * 2.1,
-        Paint()
-          ..color = Color.lerp(theme, Colors.white, 0.4)!.withValues(alpha: alpha * 0.75),
+        1.0 + mote.r1 * 2.1,
+        dot..color = base.withValues(alpha: alpha * 0.75),
       );
     }
   }
 
   void _paintCharacter(Canvas canvas, Size size) {
-    // 角色尽量占满舞台，同时把头顶让给上方的血条与回合提示。
-    final charH = size.height * 0.84;
+    // 角色尽量占满舞台，同时把头顶让给上方的血条、状态标签与回合提示。
+    final charH = size.height * 0.82;
     final charW = charH * 0.78;
     final box = Rect.fromLTWH(
       (size.width - charW) / 2,
-      size.height * 0.19,
+      size.height * 0.20,
       charW,
       charH,
     );
@@ -265,6 +369,7 @@ class _BattlePainter extends CustomPainter {
         enraged: battle.enraged,
         dissolve: fx.dissolve,
       ),
+      archetype: battle.def.archetype,
     );
     canvas.restore();
   }

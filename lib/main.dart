@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'ui/game_screen.dart';
+import 'app_settings.dart';
+import 'ui/main_menu.dart';
 import 'ui/palette.dart';
+import 'ui/sfx.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // 竖屏单手游玩：锁定竖屏并进入沉浸式全屏。
   SystemChrome.setPreferredOrientations([
@@ -12,11 +14,24 @@ void main() {
     DeviceOrientation.portraitDown,
   ]);
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-  runApp(const GemBattleApp());
+
+  // 设置与音效都先加载好再进游戏：首帧就能读到存档，音效也不会缺头几秒。
+  final settings = AppSettings();
+  final sfx = SfxController();
+  await Future.wait([settings.load(), sfx.load()]);
+  // 存档里的开关要落到音效层：游戏内的同步发生在 GameScreen 里，主菜单
+  // 这条路径没人管——静音设置下点主菜单按钮照样会响。
+  sfx.soundEnabled = settings.sound;
+  sfx.hapticsEnabled = settings.haptics;
+
+  runApp(GemBattleApp(settings: settings, sfx: sfx));
 }
 
 class GemBattleApp extends StatelessWidget {
-  const GemBattleApp({super.key});
+  final AppSettings settings;
+  final SfxController sfx;
+
+  const GemBattleApp({super.key, required this.settings, required this.sfx});
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +47,13 @@ class GemBattleApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
       ),
-      home: const GameScreen(),
+      // 游戏里的棋盘是固定比例的几何布局，字号无上限地放大会直接把 HUD 撑破；
+      // 限幅到 1.3 倍，既照顾了"我就想字大一点"的需求，也不会破坏排版。
+      builder: (context, child) => MediaQuery.withClampedTextScaling(
+        maxScaleFactor: 1.3,
+        child: child!,
+      ),
+      home: MainMenuScreen(settings: settings, sfx: sfx),
     );
   }
 }

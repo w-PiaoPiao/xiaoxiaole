@@ -5,20 +5,56 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../app_settings.dart';
 import '../engine/battle.dart';
 import '../engine/board.dart';
+import '../engine/endless.dart';
 import '../engine/gem.dart';
 import '../engine/levels.dart';
+import '../engine/move_advisor.dart';
+import '../engine/upgrades.dart';
 import 'battle_view.dart';
 import 'board_view.dart';
 import 'fx.dart';
-import 'gem_art.dart';
+import 'help_panel.dart';
 import 'hud.dart';
+import 'menu_overlay.dart';
 import 'palette.dart';
+import 'sfx.dart';
+import 'upgrade_art.dart';
 
 /// 一局游戏的总控：串起棋盘结算、战斗数值与全部动画时序。
+///
+/// 一个 [GameScreen] 承载一局：战役打完六关进通关结算；无尽模式波次
+/// 无限、敌人逐波增强，直到玩家倒下。进入时从第一关（或恢复存档）开始。
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key});
+  /// 设置与存档。不传则内部自建一份（用于预览与测试，不落盘）。
+  final AppSettings? settings;
+
+  /// 音效与触感。不传则内部自建一份。
+  final SfxController? sfx;
+
+  /// 游戏模式：战役（六关）或无尽（波次无限）。
+  final GameMode mode;
+
+  /// 起始的关卡索引（战役）或波次 - 1（无尽）。
+  final int startLevel;
+
+  /// 恢复存档。非空时优先于 [startLevel]：关卡、强化与继承生命全部还原。
+  final ResumeData? resume;
+
+  /// 回到主菜单。空表示这是根页面（预览 / 测试），菜单里不出现该入口。
+  final VoidCallback? onExitToMenu;
+
+  const GameScreen({
+    super.key,
+    this.settings,
+    this.sfx,
+    this.mode = GameMode.campaign,
+    this.startLevel = 0,
+    this.resume,
+    this.onExitToMenu,
+  });
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -27,20 +63,58 @@ class GameScreen extends StatefulWidget {
 class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateMixin {
   late final Ticker _ticker;
   late final FxController fx;
+  late final AppSettings settings;
+  late final SfxController sfx;
   late BoardEngine board;
   late BattleState battle;
   late int _levelIndex;
 
+  /// 本 State 是否自建了音效控制器（预览 / 测试路径）：自建的由自己释放。
+  bool _ownsSfx = false;
+
+  /// 关卡运行世代号：[_startLevel] 每调用一次就自增。
+  ///
+  /// 一次交换/必杀会 await 一整串连锁动画，中途玩家完全可以从菜单选关或
+  /// 重开——那时 `board`、`battle` 已经被换成新一局的实例，旧协程若继续
+  /// 跑下去，就会把旧棋盘的结算打到新关卡身上。所有长协程在恢复执行时
+  /// 都要先确认"这局还是我那一局"。
+  int _runId = 0;
+
   /// 玩家跨关卡继承的生命。
   int _carryHp = Campaign.player.maxHp;
+
+  /// 本局（一次挑战）已经吃到的强化：id → 叠了几层。
+  final Map<String, int> _taken = {};
+
+  /// 当前生效的属性档案 = 初始档案 + 全部强化。关卡之间只有它变化。
+  PlayerProfile _profile = Campaign.player;
+
+  /// 胜利后待选的三张强化牌。空表示当前没有待选。
+  List<Upgrade> _offer = const [];
+
+  /// 抽强化用的随机源（按局独立，测试与预览可以换成固定种子）。
+  final math.Random _runRng = math.Random();
 
   int? _selected;
   bool _busy = false;
   bool _showIntro = true;
   bool _showResult = false;
   bool _showHelp = false;
+  bool _showMenu = false;
   bool _campaignClear = false;
   int _turnsThisLevel = 0;
+
+  /// 必杀是否处于「选择落点」状态：此时棋盘上每一次点击都是落点。
+  bool _aimingUltimate = false;
+
+  /// 本关统计：结算面板用来给出评价。
+  int _maxCombo = 0;
+  int _totalDamage = 0;
+
+  /// 落子提示高亮的两个格子。
+  int? _hintA;
+  int? _hintB;
+  Timer? _hintTimer;
 
   Duration _lastTick = Duration.zero;
   double _sinceCheck = 0;
@@ -51,16 +125,100 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     fx = FxController();
+    final providedSettings = widget.settings;
+    if (providedSettings != null) {
+      settings = providedSettings;
+    } else {
+      settings = AppSettings();
+      settings.load();
+    }
+    final providedSfx = widget.sfx;
+    if (providedSfx != null) {
+      sfx = providedSfx;
+    } else {
+      sfx = SfxController();
+      _ownsSfx = true;
+      sfx.load();
+    }
+    settings.addListener(_applySettings);
+    // 注意：这里不能立刻应用设置——_applySettings 要读 MediaQuery，
+    // 那在 initState 里还不允许。交给紧随其后的 didChangeDependencies。
     _ticker = createTicker(_onTick)..start();
-    _startLevel(0);
+
+    // 恢复存档优先：把上一局进行中的关卡、强化与继承生命原样还原。
+    final resume = widget.resume;
+    if (resume != null) {
+      _levelIndex = _clampLevel(resume.level);
+      _taken.addAll(resume.upgrades);
+      _profile = UpgradePool.profileFor(_taken);
+      // 生命缺失（旧存档或损坏值）时按满血开局，而不是 1 血被秒。
+      _carryHp = resume.carryHp > 0
+          ? resume.carryHp.clamp(1, _profile.maxHp)
+          : _profile.maxHp;
+    } else {
+      _levelIndex = widget.startLevel;
+    }
+    _startLevel(_levelIndex, persistResume: false);
+    // 首局的存档要等第一帧之后再写：saveResume 会 notifyListeners，而监听者
+    // _applySettings 要读 MediaQuery——initState 还没走完时读不到。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_disposed) return;
+      _persistResume();
+    });
+  }
+
+  /// 把存档里的关卡号夹进当前模式的合法范围。
+  ///
+  /// 存档可能来自旧版本或已被改坏（例如战役只有六关却写着 99），这里必须
+  /// 兜住——否则 `Campaign.levels[_levelIndex]` 会在开局瞬间 RangeError。
+  int _clampLevel(int level) {
+    if (level < 0) return 0;
+    if (widget.mode == GameMode.campaign) {
+      final maxIndex = Campaign.levels.length - 1;
+      return level > maxIndex ? maxIndex : level;
+    }
+    return level;
+  }
+
+  void _persistResume() {
+    settings.saveResume(ResumeData(
+      mode: widget.mode,
+      level: _levelIndex,
+      carryHp: _carryHp,
+      upgrades: Map.of(_taken),
+    ));
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _hintTimer?.cancel();
+    settings.removeListener(_applySettings);
     _ticker.dispose();
     fx.dispose();
+    // 自建的音效控制器要自己收尾：一套池子是 11 种音效 × 3 个播放器，
+    // 预览/测试进程反复进出 GameScreen 会一路累积。
+    if (_ownsSfx) sfx.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _applySettings();
+  }
+
+  /// 把设置（以及系统的"减少动态效果"）同步到特效层与音效层。
+  void _applySettings() {
+    sfx.soundEnabled = settings.sound;
+    sfx.hapticsEnabled = settings.haptics;
+    final reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    fx.allowShake = settings.screenShake && !reduceMotion;
+    fx.allowFlash = !reduceMotion;
+    fx.reducedMotion = reduceMotion;
+    // 暂停菜单里的设置开关值来自本 State 的 build：改完必须重建，否则开关
+    // 不会变色，再点一次也仍然发出同一个旧值（看起来就像开关坏了）。
+    _refresh();
   }
 
   void _onTick(Duration elapsed) {
@@ -69,16 +227,19 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (dt <= 0) return;
     // 上限放到 0.12 秒：低帧率设备上动画仍能跟上真实时间。钳得太死会让
     // 动画时间以远低于真实时间的速度流逝，连锁看起来就像卡住了。
-    fx.tick(dt.clamp(0.0, 0.12));
+    final scaled = dt.clamp(0.0, 0.12);
+    fx.tick(scaled);
 
     // 定局兜底：胜负已定却迟迟没弹出结算（长连锁、低帧率都可能把序列拖住），
     // 直接补结算并放开操作。只在 battle.isOver 时生效，不可能打断正常对局。
     if (_busy) {
-      _busyElapsed += dt;
+      // 用钳制后的时间累加：从后台切回来时 dt 可能有好几秒，未钳制会和
+      // 上面"动画以真实时间流逝"的假设打架，直接顶穿兜底阈值。
+      _busyElapsed += scaled;
       if (_busyElapsed > 6.0 && battle.isOver) {
         _busyElapsed = 0;
         _busy = false;
-        _handleBattleEnd();
+        _handleBattleEnd(_runId);
         _ensureVisualSync('定局兜底');
         _refresh();
       }
@@ -95,7 +256,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       if (_sinceCheck >= 1.0) {
         _sinceCheck = 0;
         if (battle.isOver) {
-          _handleBattleEnd();
+          _handleBattleEnd(_runId);
         } else {
           _ensureVisualSync('空闲巡检');
         }
@@ -105,28 +266,51 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   // ------------------------------------------------------------------ 关卡流程
 
-  void _startLevel(int index) {
+  /// 当前关卡的包装：战役走固定配置，无尽按波次生成。
+  LevelDef get _currentLevel => widget.mode == GameMode.campaign
+      ? Campaign.levels[_levelIndex]
+      : EndlessRoster.levelFor(_levelIndex + 1);
+
+  void _startLevel(int index, {bool persistResume = true}) {
+    // 换局：世代号自增，仍在飞的旧协程会在下一次检查点安静退出。
+    _runId++;
     _levelIndex = index;
-    final level = Campaign.levels[index];
+    final level = _currentLevel;
     board = BoardEngine()..reset();
     battle = BattleState(
       def: level.enemy,
       levelIndex: index,
-      playerHp: _carryHp,
+      profile: _profile,
+      playerHp: _carryHp.clamp(1, _profile.maxHp),
     );
     _selected = null;
     _busy = false;
+    _busyElapsed = 0;
     _showResult = false;
     _showIntro = true;
+    _showMenu = false;
     _campaignClear = false;
     _turnsThisLevel = 0;
+    _maxCombo = 0;
+    _totalDamage = 0;
     _endResolved = false;
+    _aimingUltimate = false;
+    // 上一关留下的三张候选牌必须清掉：从菜单直接跳关时，上一关的牌
+    // 不该跟过来（否则会变成"给第 2 关发第 1 关的奖励"）。
+    _offer = const [];
+    _clearHint();
     fx.reset();
     _seedBoardAnimation();
+    // 每开一关都把「进行中的一局」写进存档：中途杀掉应用，主菜单的
+    // 「继续游戏」也能从这里接着打（无尽模式同样适用）。
+    if (persistResume) _persistResume();
     _refresh();
-    // 开场卡停留一会儿后自动进入战斗。
+    // 开场卡停留一会儿后自动进入战斗（可以点击提前跳过）。
+    // 用世代号而不是关卡号做身份：同一关在 2 秒内重开时，旧定时器必须失效。
+    final run = _runId;
     _pause(2.0).then((_) {
-      if (_disposed || _levelIndex != index) return;
+      if (_disposed || run != _runId) return;
+      if (!_showIntro) return; // 玩家已经手动跳过
       setState(() => _showIntro = false);
     });
   }
@@ -216,8 +400,20 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   // ------------------------------------------------------------------ 玩家输入
 
+  /// 打开菜单/说明等遮罩时，棋盘输入一律屏蔽。
+  bool get _inputBlocked =>
+      _busy || battle.isOver || _showIntro || _showResult || _showMenu || _showHelp;
+
   void _onSelect(int index) {
-    if (_busy || battle.isOver || _showIntro || _showResult) return;
+    // 选落点模式下，点哪儿就在哪儿放必杀——这是玩家自己的决定，
+    // 也是「攒了半天怒气，终于能打在最好的位置上」的那份主动权。
+    if (_aimingUltimate) {
+      _fireUltimate(index);
+      return;
+    }
+    if (_inputBlocked) return;
+    _clearHint();
+    sfx.tap();
     final current = _selected;
     if (current == null) {
       setState(() => _selected = index);
@@ -228,7 +424,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       return;
     }
     if (board.adjacent(current, index)) {
-      _selected = null;
+      setState(() => _selected = null);
       _attemptSwap(current, index);
       return;
     }
@@ -236,8 +432,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 
   void _onSwapRequest(int a, int b) {
-    if (_busy || battle.isOver || _showIntro || _showResult) return;
-    _selected = null;
+    // 瞄准期间拖动不算交换：那只是在移动手指，不该把棋盘搅乱。
+    if (_inputBlocked || _aimingUltimate) return;
+    _clearHint();
+    setState(() => _selected = null);
     _attemptSwap(a, b);
   }
 
@@ -246,31 +444,43 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (!board.canSwap(a, b)) {
       // 非法交换：轻微抖动提示
       fx.shakeBy(5);
+      sfx.reject();
       setState(() => _selected = null);
       return;
     }
     _busy = true;
+    // 选中的金框必须经 setState 消失：只改字段的话父级不会重建，
+    // BoardView 拿到的还是旧的 selected，金框会一直挂在交换动画上。
     setState(() => _selected = null);
+    // 捕获这一局的棋盘与战斗。await 期间玩家仍可能从菜单换关，那时字段
+    // 已经指向新一局的实例，旧协程必须就地退出。
+    final run = _runId;
+    final engine = board;
+    final state = battle;
     // try/finally 兜住：无论中途发生什么，都一定会把 _busy 放掉，
     // 绝不能让玩家被永久锁住操作。
     try {
-      board.swapCells(a, b);
-      fx.applySnapshot(board.snapshot(), fallDuration: 0.16);
+      engine.swapCells(a, b);
+      fx.applySnapshot(engine.snapshot(), fallDuration: 0.16);
       await _pause(0.15);
+      if (_disposed || run != _runId) return;
 
-      final steps = board.resolveSwap(a, b);
+      final steps = engine.resolveSwap(a, b);
       if (steps.isEmpty) {
-        board.swapCells(a, b);
-        fx.applySnapshot(board.snapshot(), fallDuration: 0.16);
+        engine.swapCells(a, b);
+        fx.applySnapshot(engine.snapshot(), fallDuration: 0.16);
         await _pause(0.16);
+        sfx.reject();
         return;
       }
 
       _turnsThisLevel++;
-      await _playSteps(steps);
-      await _finishTurn();
+      await _playSteps(run, engine, state, steps);
+      await _finishTurn(run, engine, state);
     } finally {
-      if (!_disposed) {
+      // 只有"还是这一局"才放开封锁：旧协程的收尾不能把新一局的 _busy
+      // 提前清掉（那会打开一次并发输入窗口）。
+      if (!_disposed && run == _runId) {
         _busy = false;
         _ensureVisualSync('交换结算');
         _refresh();
@@ -278,23 +488,49 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     }
   }
 
-  Future<void> _castUltimate() async {
+  /// 点「斩月」：第一次点是进入选落点状态，再点一次是取消。
+  ///
+  /// 必杀固定在棋盘正中央也能用，但把落点交给玩家之后，它就从一个"到点就按"
+  /// 的按钮变成了一次真正的决策——瞄准哪里，取决于棋盘上哪种颜色堆得最多。
+  void _armUltimate() {
+    if (_busy || !battle.canCastUltimate) return;
+    if (_aimingUltimate) {
+      setState(() => _aimingUltimate = false);
+      return;
+    }
+    sfx.tap();
+    _clearHint();
+    setState(() {
+      _aimingUltimate = true;
+      _selected = null;
+    });
+  }
+
+  Future<void> _fireUltimate(int centerIndex) async {
     if (_busy || !battle.canCastUltimate) return;
     _busy = true;
+    _aimingUltimate = false;
+    _clearHint();
     setState(() => _selected = null);
+    final run = _runId;
+    final engine = board;
+    final state = battle;
     try {
-    final events = battle.castUltimate();
-    fx.triggerUltimate();
-    fx.lunge();
-    fx.shakeBy(26);
-    _presentEnemyEvents(events);
-    await _pause(0.5);
+      sfx.castUltimate();
+      final events = state.castUltimate();
+      fx.triggerUltimate();
+      fx.lunge();
+      fx.shakeBy(26);
+      _presentEnemyEvents(events);
+      await _pause(0.5);
+      if (_disposed || run != _runId) return;
 
-    final steps = board.resolveUltimate(board.index(BoardEngine.cols ~/ 2, BoardEngine.rows ~/ 2));
-    await _playSteps(steps, multiplier: Campaign.player.ultimateMultiplier);
-    await _finishTurn();
+      final steps = engine.resolveUltimate(centerIndex);
+      // 倍率取自这一局的档案：换局后 _profile 可能已经变了。
+      await _playSteps(run, engine, state, steps, multiplier: state.profile.ultimateMultiplier);
+      await _finishTurn(run, engine, state);
     } finally {
-      if (!_disposed) {
+      if (!_disposed && run == _runId) {
         _busy = false;
         _ensureVisualSync('必杀结算');
         _refresh();
@@ -302,11 +538,46 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     }
   }
 
+  /// 让落子顾问推演一步，把建议的两个格子高亮出来。
+  void _requestHint() {
+    if (_inputBlocked || _aimingUltimate) return;
+    final suggestion = const MoveAdvisor().suggest(board, battle);
+    if (suggestion == null) return;
+    sfx.tap();
+    _hintTimer?.cancel();
+    setState(() {
+      _hintA = suggestion.a;
+      _hintB = suggestion.b;
+    });
+    _hintTimer = Timer(const Duration(milliseconds: 2800), _clearHint);
+  }
+
+  void _clearHint() {
+    _hintTimer?.cancel();
+    _hintTimer = null;
+    if (_hintA == null && _hintB == null) return;
+    if (!mounted || _disposed) return;
+    setState(() {
+      _hintA = null;
+      _hintB = null;
+    });
+  }
+
   // ------------------------------------------------------------------ 结算时序
 
-  Future<void> _playSteps(List<CascadeStep> steps, {double multiplier = 1.0}) async {
+  /// 逐步演出一次连锁。
+  ///
+  /// [run]、[board]、[battle] 由调用方捕获后传入：这一串 await 可能跨越
+  /// 玩家的"从菜单换关"，字段 `board`/`battle` 那时已经指向新一局了。
+  Future<void> _playSteps(
+    int run,
+    BoardEngine board,
+    BattleState battle,
+    List<CascadeStep> steps, {
+    double multiplier = 1.0,
+  }) async {
     for (final step in steps) {
-      if (_disposed) return;
+      if (_disposed || run != _runId) return;
       // 胜负已定（例如击杀 BOSS 的那一下带出的后续连锁）：动画提速，
       // 让玩家尽快看到结算，而不是干等一段已经无关紧要的连锁演完。
       final pace = battle.isOver ? 0.3 : 1.0;
@@ -315,18 +586,39 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         for (final activation in step.activations) {
           fx.playActivation(activation);
         }
+        sfx.activateSpecial();
         fx.shakeBy(5 + step.activations.length * 2.0);
       }
 
       fx.beginClear(step.cleared);
-      if (step.combo >= 2) {
+      sfx.combo(step.combo);
+      _maxCombo = math.max(_maxCombo, step.combo);
+
+      // 组合技：两颗强化宝石换在一起时把名字报出来，并额外炸一下屏幕。
+      for (final activation in step.activations) {
+        final name = activation.comboName;
+        if (name == null) continue;
         fx.addLabel(
-          '连击 x${step.combo}',
+          name,
+          BoardEngine.cols / 2,
+          BoardEngine.rows / 2 - 0.6,
+          Palette.gold,
+          size: 42,
+        );
+        fx.shakeBy(20);
+      }
+
+      if (step.combo >= 2) {
+        final tier = _comboTier(step.combo);
+        fx.addLabel(
+          tier.text,
           BoardEngine.cols / 2,
           BoardEngine.rows / 2,
-          Palette.gold,
-          size: 32,
+          tier.color,
+          size: tier.size,
         );
+        // 连击越深，飘字越大、屏幕抖得越狠——连胜的势头要看得见。
+        fx.shakeBy(tier.shake);
       }
       await _pause(0.12 * pace);
 
@@ -362,6 +654,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       _refresh();
 
       if (step.spawns.isNotEmpty) {
+        sfx.spawnSpecial();
         for (final spawn in step.spawns) {
           fx.addLabel(
             switch (spawn.kind) {
@@ -381,14 +674,16 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       // 等宝石落位，但给一个很短的上限：动画只是表现，引擎那边早已算完，
       // 绝不能让一段长连锁把玩家晾在那里。
       await fx.settle(timeout: Duration(milliseconds: (420 * pace).round()));
-      if (_disposed) return;
+      if (_disposed || run != _runId) return;
       await _pause(0.04 * pace);
     }
   }
 
-  Future<void> _finishTurn() async {
+  /// 玩家行动结束 → 敌方回合 → 无解重排。同样带世代号。
+  Future<void> _finishTurn(int run, BoardEngine board, BattleState battle) async {
+    if (_disposed || run != _runId) return;
     if (battle.isOver) {
-      await _handleBattleEnd();
+      await _handleBattleEnd(run);
       return;
     }
 
@@ -397,6 +692,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (incoming.isNotEmpty) {
       fx.lunge();
       await _pause(0.20);
+      if (_disposed || run != _runId) return;
       // 敌人出手：爪痕落在玩家一侧 + 全屏震动 + 边缘红闪
       final hit = incoming.first.amount;
       fx.addStrike(
@@ -407,16 +703,18 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       );
       fx.hitStop = 0.06;
       fx.shakeBy(20);
-      fx.playerFlash = 1;
+      fx.playerFlash = fx.allowFlash ? 1 : 0;
+      sfx.playerHurt();
       _presentPlayerEvents(events);
       await _pause(0.30);
+      if (_disposed || run != _runId) return;
     } else {
       _presentPlayerEvents(events);
     }
 
     _refresh();
     if (battle.isOver) {
-      await _handleBattleEnd();
+      await _handleBattleEnd(run);
       return;
     }
 
@@ -432,31 +730,99 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   /// 结算一次胜负。带一次性保护：重复调用只会执行一次。
   bool _endResolved = false;
 
-  Future<void> _handleBattleEnd() async {
+  Future<void> _handleBattleEnd(int run) async {
     if (_endResolved) return;
+    if (_disposed || run != _runId) return;
     _endResolved = true;
+    _aimingUltimate = false;
+    final campaign = widget.mode == GameMode.campaign;
     if (battle.isWon) {
+      // 过关奖励：血量按「最大生命的 50%」保底后再补 25%。
+      // 打得越干净、进下一关越有余裕，但保底刻意压在半血——
+      // 上一关的失误应当带一点代价过去，战役才有连续的紧张感。
       _carryHp = math.min(
-        Campaign.player.maxHp,
+        _profile.maxHp,
         math.max(
-          (Campaign.player.maxHp * 0.6).round(),
-          battle.playerHp + (Campaign.player.maxHp * 0.35).round(),
+          (_profile.maxHp * 0.5).round(),
+          battle.playerHp + (_profile.maxHp * 0.25).round(),
         ),
       );
       fx.dissolveTarget = 1;
       fx.shakeBy(16);
+      sfx.victory();
       await _pause(1.0);
     } else {
-      _carryHp = Campaign.player.maxHp;
-      fx.playerFlash = 1;
+      // 输了从满血重来，但**保留已经拿到的强化**——重试的难度不该比第一次更高。
+      _carryHp = _profile.maxHp;
+      fx.playerFlash = fx.allowFlash ? 1 : 0;
       fx.shakeBy(20);
+      sfx.defeat();
       await _pause(0.5);
     }
-    if (_disposed) return;
+    if (_disposed || run != _runId) return;
+
+    // 记录战绩：战役解锁下一关并保存星级；无尽写下最佳波次。
+    if (battle.isWon) {
+      if (campaign) {
+        settings.recordClear(
+          levelIndex: _levelIndex,
+          stars: _starsEarned,
+          turns: _turnsThisLevel,
+          levelCount: Campaign.levels.length,
+        );
+      } else {
+        settings.recordEndless(_levelIndex + 1);
+      }
+    }
+
+    final lastLevel = campaign && _levelIndex >= Campaign.levels.length - 1;
+    // 打到「终局」的局（战役通关、任何模式战败）不再算进行中：主菜单的
+    // 「继续游戏」随之消失。战败仍可当场重试，重开会重新写入存档。
+    if (!battle.isWon || lastLevel) {
+      settings.clearResume();
+    }
+
+    // 通关一关发三张强化牌：这是"越打越猛"的全部来源。无尽模式每波都发，
+    // 与逐波增强的敌人保持同一条成长赛道。
+    final offer = battle.isWon && !lastLevel
+        ? UpgradePool.roll(
+            profile: _profile,
+            taken: _taken,
+            rng: _runRng,
+          )
+        : const <Upgrade>[];
+
     setState(() {
-      _campaignClear = battle.isWon && _levelIndex >= Campaign.levels.length - 1;
+      _campaignClear = battle.isWon && lastLevel;
+      _offer = offer;
       _showResult = true;
     });
+  }
+
+  /// 吃掉一张强化牌并进入下一关。
+  void _takeUpgrade(Upgrade upgrade) {
+    // 双指同帧点击会让回调触发两次（重建之前旧的命中树还在）：第二次直接
+    // 忽略，否则同一个强化会叠两层、还会一次跳过两关。
+    if (!_offer.contains(upgrade)) return;
+    sfx.spawnSpecial();
+    final before = _profile;
+    _profile = upgrade.apply(_profile);
+    _taken[upgrade.id] = (_taken[upgrade.id] ?? 0) + 1;
+    // 生命上限长出来的部分当场补满，不然"上限 +40"看起来像没生效。
+    final grown = _profile.maxHp - before.maxHp;
+    if (grown > 0) _carryHp += grown;
+    _carryHp = _carryHp.clamp(1, _profile.maxHp);
+    _offer = const [];
+    _startLevel(_levelIndex + 1);
+  }
+
+  /// 剩余生命越多星级越高。1 星保底，3 星要求几乎满血通关。
+  int get _starsEarned {
+    if (!battle.isWon) return 0;
+    final ratio = battle.playerHp / _profile.maxHp;
+    if (ratio >= 0.8) return 3;
+    if (ratio >= 0.5) return 2;
+    return 1;
   }
 
   // ------------------------------------------------------------------ 飘字
@@ -488,33 +854,73 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     }
   }
 
+  /// 玩家一侧飘字的左右两条分道。
+  ///
+  /// 一次连锁会同时产出治疗 / 护盾 / 怒气 / 易伤 好几条飘字，全挤在中轴线上
+  /// 会糊成一团看不清。左右分列 + 上下错开之后，四条同时出现也互不遮挡。
+  static const double _laneLeft = 0.27;
+  static const double _laneRight = 0.73;
+
+  /// 连锁的分级反馈：越深的连锁，字越大、颜色越烫、屏幕抖得越狠。
+  ///
+  /// 只在 2 连以上出现——1 连是常态，每次都弹字很快就会变成噪音。
+  static _ComboTier _comboTier(int combo) {
+    if (combo >= 8) {
+      return _ComboTier('无双 x$combo', const Color(0xFFFFE9A8), 52, 26);
+    }
+    if (combo >= 6) {
+      return _ComboTier('暴走 x$combo', Palette.danger, 46, 20);
+    }
+    if (combo >= 4) {
+      return _ComboTier('强袭 x$combo', const Color(0xFFFF9A4D), 40, 14);
+    }
+    return _ComboTier('连击 x$combo', Palette.gold, 32 + (combo - 2) * 2.0, 7);
+  }
+
   void _presentEnemyEvents(List<CombatEvent> events) {
+    // 只统计 playerDamage。强化宝石的额外伤害在引擎里已经算进这笔伤害
+    // （applyClear 先 _damageEnemy、再补一条 special 事件做标记），
+    // 把 special 也加进来会让每一次引爆都虚报一遍伤害，连击越深偏得越多。
     final damage = events
-        .where((e) => e.kind == CombatEventKind.playerDamage || e.kind == CombatEventKind.special)
+        .where((e) => e.kind == CombatEventKind.playerDamage)
         .fold(0, (sum, e) => sum + e.amount);
+    final crit = events.any((e) => e.kind == CombatEventKind.crit);
     if (damage > 0) {
-      fx.hitImpact(damage: damage);
-      fx.addFloat('- $damage', Palette.hpEnemy, ny: 0.50, size: 34);
-      fx.shakeBy(3 + damage * 0.03);
+      _totalDamage += damage;
+      fx.hitImpact(damage: damage, crit: crit);
+      fx.addFloat(
+        crit ? '暴击 - $damage' : '- $damage',
+        crit ? Palette.gold : Palette.hpEnemy,
+        ny: crit ? 0.42 : 0.50,
+        size: crit ? 46 : 34,
+      );
+      fx.shakeBy((3 + damage * 0.03) * (crit ? 2.2 : 1));
+      if (crit) {
+        // 暴击单独再来一层演出：定格更久 + 一条金色斩击轨迹。
+        sfx.crit();
+        fx.addStrike(StrikeKind.sword, count: 8, ny: 0.50);
+      } else {
+        sfx.enemyHit(damage: damage);
+      }
     }
     final blocked = events
         .where((e) => e.kind == CombatEventKind.enemyShield)
         .fold(0, (sum, e) => sum + e.amount);
     if (blocked > 0) {
-      fx.addFloat('护盾抵挡 $blocked', Palette.shield, ny: 0.44, size: 17);
+      fx.addFloat('护盾抵挡 $blocked', Palette.shield, nx: 0.50, ny: 0.36, size: 17);
     }
     final drain = events
         .where((e) => e.kind == CombatEventKind.enemyDrain)
         .fold(0, (sum, e) => sum + e.amount);
     if (drain > 0) {
-      fx.addFloat('吸血 +$drain', const Color(0xFFB44BFF), ny: 0.58, size: 18);
+      fx.addFloat('吸血 +$drain', const Color(0xFFB44BFF), nx: 0.76, ny: 0.50, size: 18);
     }
     if (events.any((e) => e.kind == CombatEventKind.enrage)) {
-      fx.addFloat('狂暴', Palette.danger, ny: 0.40, size: 30);
+      fx.addFloat('狂暴', Palette.danger, nx: 0.50, ny: 0.30, size: 30);
       fx.shakeBy(14);
     }
     if (events.any((e) => e.kind == CombatEventKind.ultimate)) {
-      fx.addFloat('斩月', Palette.gold, ny: 0.38, size: 40);
+      fx.addFloat('斩月', Palette.gold, nx: 0.50, ny: 0.33, size: 40);
     }
   }
 
@@ -522,26 +928,47 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     for (final e in events) {
       switch (e.kind) {
         case CombatEventKind.heal:
-          fx.addFloat('+${e.amount}', Palette.hpPlayer, ny: 0.93, size: 22);
+          fx.addFloat(
+            e.text == '回春' ? '回春 +${e.amount}' : '+${e.amount}',
+            Palette.hpPlayer,
+            nx: _laneLeft,
+            ny: 0.82,
+            size: 22,
+          );
         case CombatEventKind.shieldGain:
-          fx.addFloat('+${e.amount} 护盾', Palette.shield, ny: 0.97, size: 20);
+          fx.addFloat('+${e.amount} 护盾', Palette.shield, nx: _laneLeft, ny: 0.90, size: 20);
         case CombatEventKind.rage:
-          fx.addFloat('怒气 +${e.amount}', Palette.rage, ny: 1.00, size: 17);
+          fx.addFloat('怒气 +${e.amount}', Palette.rage, nx: _laneRight, ny: 0.90, size: 17);
         case CombatEventKind.curse:
-          fx.addFloat('易伤 +${e.amount}', Palette.gem(GemType.purple), ny: 0.90, size: 19);
+          fx.addFloat(
+            '易伤 +${e.amount}',
+            Palette.gem(GemType.purple),
+            nx: _laneRight,
+            ny: 0.82,
+            size: 19,
+          );
         case CombatEventKind.healBlocked:
-          fx.addFloat('治疗 -${e.amount}', const Color(0xFFE85A7A), ny: 0.86, size: 17);
+          fx.addFloat('治疗 -${e.amount}', const Color(0xFFE85A7A), nx: _laneRight, ny: 0.74, size: 17);
+        case CombatEventKind.rageDrain:
+          fx.addFloat('怒气 -${e.amount}', const Color(0xFF57E0C8), nx: _laneRight, ny: 0.74, size: 17);
         case CombatEventKind.enemyAttack:
           fx.addFloat(
             e.text == '重击' ? '重击 -${e.amount}' : '-${e.amount}',
             Palette.danger,
-            ny: 0.88,
+            nx: 0.50,
+            ny: 0.84,
             size: e.text == '重击' ? 34 : 28,
           );
         case CombatEventKind.playerShield:
-          fx.addFloat('护盾抵挡 ${e.amount}', Palette.shield, ny: 0.94, size: 18);
+          fx.addFloat('护盾抵挡 ${e.amount}', Palette.shield, nx: 0.50, ny: 0.95, size: 18);
         case CombatEventKind.enemyGuard:
-          fx.addFloat('敌方护盾 +${e.amount}', const Color(0xFFE0A94A), ny: 0.60, size: 16);
+          fx.addFloat(
+            '敌方护盾 +${e.amount}',
+            const Color(0xFFE0A94A),
+            nx: 0.50,
+            ny: 0.60,
+            size: 16,
+          );
         default:
           break;
       }
@@ -552,109 +979,212 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
-    final level = Campaign.levels[_levelIndex];
+    final level = _currentLevel;
     return Scaffold(
       backgroundColor: Palette.bgDeep,
       body: Stack(
         children: [
-          Column(
-            children: [
-              Expanded(
-                flex: 46,
-                child: BattleView(battle: battle, fx: fx, level: level),
-              ),
-              _playerStrip(),
-              Expanded(
-                flex: 54,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-                  child: BoardView(
-                    board: board,
+          // 震屏：整块战斗区 + 棋盘跟着抖（遮罩层不抖，否则面板会跟着晃）。
+          // 子树的绘制有各自的 RepaintBoundary，所以这里每帧只是更新一次
+          // 合成变换，不会把两边的绘制重新跑一遍；不震的时候连这层都不挂。
+          AnimatedBuilder(
+            animation: fx,
+            builder: (context, child) => fx.shake <= 0.05
+                ? child!
+                : Transform.translate(offset: fx.shakeOffset, child: child),
+            child: Column(
+              children: [
+                Expanded(
+                  flex: 46,
+                  child: BattleView(
+                    battle: battle,
                     fx: fx,
-                    selected: _selected,
-                    enabled: !_busy && !battle.isOver && !_showIntro && !_showResult,
-                    onSelect: _onSelect,
-                    onSwapRequest: _onSwapRequest,
+                    level: level,
+                    // 打开任何遮罩都先退出必杀瞄准：否则关掉面板回来时
+                    // 还停在瞄准态，玩家会以为自己的操作被吞了。
+                    onHelp: () => setState(() {
+                      _showMenu = false;
+                      _showHelp = true;
+                      _aimingUltimate = false;
+                    }),
+                    onMenu: () => setState(() {
+                      _showHelp = false;
+                      _showMenu = true;
+                      _aimingUltimate = false;
+                    }),
                   ),
                 ),
-              ),
-            ],
+                _playerStrip(),
+                Expanded(
+                  flex: 54,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                    child: BoardView(
+                      board: board,
+                      fx: fx,
+                      selected: _selected,
+                      hintA: _hintA,
+                      hintB: _hintB,
+                      enabled: !_inputBlocked,
+                      aimingUltimate: _aimingUltimate,
+                      onSelect: _onSelect,
+                      onSwapRequest: _onSwapRequest,
+                      onPress: (_) => sfx.tap(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
           if (_showIntro) _introCard(level),
           if (_showResult) _resultOverlay(level),
+          if (_showMenu) _menuOverlay(),
           if (_showHelp) _helpOverlay(),
-          Positioned(
-            top: 0,
-            right: 8,
-            child: SafeArea(
-              child: IconButton(
-                onPressed: () => setState(() => _showHelp = !_showHelp),
-                icon: const Icon(Icons.help_outline, color: Palette.textDim, size: 20),
-                tooltip: '玩法说明',
-              ),
-            ),
-          ),
         ],
       ),
     );
   }
 
   Widget _playerStrip() {
-    final profile = Campaign.player;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
-      decoration: BoxDecoration(
-        color: Palette.panel.withValues(alpha: 0.92),
-        border: const Border(
-          top: BorderSide(color: Palette.panelEdge, width: 1),
-          bottom: BorderSide(color: Palette.panelEdge, width: 1),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                EnergyBar(
-                  value: battle.playerHpRatio,
-                  color: Palette.hpPlayer,
-                  leading: '生命',
-                  trailing: '${battle.playerHp}/${profile.maxHp}',
-                  height: 14,
-                ),
-                const SizedBox(height: 6),
-                EnergyBar(
-                  value: battle.rage / profile.maxRage,
-                  color: Palette.rage,
-                  leading: '怒气',
-                  trailing: battle.rageReady ? '就绪' : '${battle.rage}',
-                  height: 10,
-                ),
-              ],
+    final profile = _profile;
+    final hasShield = battle.shield > 0;
+    // 测量点是整屏宽度（不是容器内宽），这样阈值读起来就是屏幕宽度：
+    // 320 的小屏走紧凑文案，常见竖屏（≥390）保持完整文案。
+    return LayoutBuilder(
+      builder: (context, outer) {
+        // 320 像素的小屏 + 系统大字体时，两侧的按钮已经吃掉大半个宽度，
+        // 血条只剩不到 50 像素。一旦挂上护盾，文案再长一点就会把这一行挤爆
+        // （实测溢出 2.3 像素），所以窄屏改用紧凑写法：
+        // 「300/300+40」→「300+40」、「18/100」→「18」。
+        // 上限在入场卡与结算面板里都交代过，省掉不影响理解。
+        final tight = outer.maxWidth < 380;
+        final hpText = switch ((tight, hasShield)) {
+          (true, true) => '${battle.playerHp}+${battle.shield}',
+          (true, false) => '${battle.playerHp}',
+          (false, true) => '${battle.playerHp}/${profile.maxHp}+${battle.shield}',
+          (false, false) => '${battle.playerHp}/${profile.maxHp}',
+        };
+        return Container(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+          decoration: BoxDecoration(
+            color: Palette.panel.withValues(alpha: 0.92),
+            border: const Border(
+              top: BorderSide(color: Palette.panelEdge, width: 1),
+              bottom: BorderSide(color: Palette.panelEdge, width: 1),
             ),
           ),
-          if (battle.shield > 0) ...[
-            const SizedBox(width: 10),
-            Tag(
-              text: '护盾 ${battle.shield}',
-              color: Palette.shield,
-              icon: Icons.shield,
-              dense: true,
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    EnergyBar(
+                      value: battle.playerHpRatio,
+                      // 护盾直接画在血条上（叠加段），省掉一个独立标签的位置，
+                      // 小屏上才放得下"提示"按钮。
+                      shieldValue: hasShield ? battle.shield / profile.maxShield : 0,
+                      color: Palette.hpPlayer,
+                      leading: '生命',
+                      trailing: hpText,
+                      height: 14,
+                      semanticLabel: '生命 ${battle.playerHp} / ${profile.maxHp}'
+                          '${hasShield ? '，护盾 ${battle.shield}' : ''}',
+                    ),
+                    const SizedBox(height: 6),
+                    EnergyBar(
+                      value: battle.rage / profile.maxRage,
+                      color: Palette.rage,
+                      leading: '怒气',
+                      trailing: battle.rageReady
+                          ? '就绪'
+                          : (tight ? '${battle.rage}' : '${battle.rage}/${profile.maxRage}'),
+                      height: 10,
+                      semanticLabel: '怒气 ${battle.rage} / ${profile.maxRage}',
+                    ),
+                  ],
+                ),
+              ),
+              // 本局吃到多少强化，一眼看得见——"我变强了"这件事本身就该被展示。
+              if (_taken.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                _buildBadge(tight: tight),
+              ],
+              const SizedBox(width: 8),
+              Semantics(
+                button: true,
+                enabled: !_inputBlocked && !_aimingUltimate,
+                label: '提示下一步怎么走',
+                child: GestureDetector(
+                  onTap: _requestHint,
+                  child: Tooltip(
+                    message: '提示',
+                    child: Container(
+                      width: tight ? 38 : 44,
+                      height: 48,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(14),
+                        color: Palette.slotFill.withValues(alpha: 0.75),
+                        border: Border.all(color: Palette.panelEdge),
+                      ),
+                      child: Icon(
+                        Icons.lightbulb_outline,
+                        size: 20,
+                        color: _aimingUltimate
+                            ? Palette.textDim.withValues(alpha: 0.4)
+                            : Palette.textDim,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // 数值变化本来就会触发一次 setState，这里不需要监听每帧的 fx。
+              ActionButton(
+                label: _aimingUltimate ? '取消' : '斩月',
+                hint: _aimingUltimate
+                    ? '点击棋盘落点'
+                    : (battle.rageReady
+                        ? '自选落点'
+                        : '怒气 ${battle.rage}/${profile.maxRage}'),
+                enabled: battle.rageReady && !_busy && !battle.isOver,
+                color: _aimingUltimate ? Palette.danger : Palette.rage,
+                onTap: _armUltimate,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 状态条右侧的强化计数徽章。点开菜单可以看到完整清单。
+  Widget _buildBadge({bool tight = false}) {
+    final stacks = _taken.values.fold<int>(0, (sum, n) => sum + n);
+    return Semantics(
+      label: '本局已获得 $stacks 层强化',
+      excludeSemantics: true,
+      child: Container(
+        width: tight ? 32 : 38,
+        height: 48,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          color: Palette.gold.withValues(alpha: 0.14),
+          border: Border.all(color: Palette.gold.withValues(alpha: 0.55)),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.auto_awesome, size: 15, color: Palette.gold),
+            const SizedBox(height: 1),
+            Text(
+              '$stacks',
+              style: AppText.number.copyWith(fontSize: 11, color: Palette.gold),
             ),
           ],
-          const SizedBox(width: 10),
-          AnimatedBuilder(
-            animation: fx,
-            builder: (context, _) => ActionButton(
-              label: '斩月',
-              hint: battle.rageReady ? '斩杀全场' : '怒气 ${battle.rage}/100',
-              enabled: battle.rageReady && !_busy && !battle.isOver,
-              progress: battle.rage / profile.maxRage,
-              onTap: _castUltimate,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -663,7 +1193,11 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   Widget _introCard(LevelDef level) {
     return Positioned.fill(
-      child: IgnorePointer(
+      // 点任意处跳过：连续挑战时不必每关都干等两秒。
+      child: GestureDetector(
+        onTap: () {
+          if (_showIntro) setState(() => _showIntro = false);
+        },
         child: Container(
           color: Colors.black.withValues(alpha: 0.72),
           child: Center(
@@ -691,26 +1225,33 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                   ],
                 ),
                 child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(level.name, style: AppText.subtitle),
-                  const SizedBox(height: 10),
-                  Text(
-                    level.enemy.name,
-                    style: AppText.title.copyWith(
-                      fontSize: 32,
-                      color: Color(level.enemy.themeColor),
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(level.name, style: AppText.subtitle),
+                    const SizedBox(height: 10),
+                    Text(
+                      level.enemy.name,
+                      style: AppText.title.copyWith(
+                        fontSize: 32,
+                        color: Color(level.enemy.themeColor),
+                      ),
+                      textAlign: TextAlign.center,
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    level.enemy.taunt,
-                    style: AppText.label.copyWith(fontSize: 13, height: 1.6),
-                  ),
-                  const SizedBox(height: 22),
-                  Text('回合 ${level.enemy.turnsPerAttack} · 出手 ${level.enemy.attack}',
-                      style: AppText.label),
-                ],
+                    const SizedBox(height: 12),
+                    Text(
+                      level.enemy.taunt,
+                      style: AppText.label.copyWith(fontSize: 13, height: 1.6),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 22),
+                    Text('回合 ${level.enemy.turnsPerAttack} · 出手 ${level.enemy.attack}',
+                        style: AppText.label),
+                    const SizedBox(height: 14),
+                    Text(
+                      '点击任意处开始',
+                      style: AppText.label.copyWith(fontSize: 11, color: Palette.gold.withValues(alpha: 0.8)),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -720,53 +1261,307 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     );
   }
 
+  Widget _menuOverlay() {
+    return MenuOverlay(
+      settings: settings,
+      currentLevel: _levelIndex,
+      taken: Map.of(_taken),
+      showLevelSelect: widget.mode == GameMode.campaign,
+      modeLabel: widget.mode == GameMode.campaign ? '战役' : '无尽 · 第 ${_levelIndex + 1} 波',
+      // 无尽模式里没有「关」：同一个按钮要说成「从第 1 波重来」。
+      restartLabel: widget.mode == GameMode.campaign
+          ? (_taken.isEmpty ? '回到第一关' : '重开一局（清空强化）')
+          : '从第 1 波重来',
+      onResume: () => setState(() {
+        _showMenu = false;
+        // 从结算面板点"关卡选择"再关掉菜单时要回到结算：这一局已经结束
+        // （battle.isOver 让棋盘不可操作），而 _endResolved 又会挡掉兜底
+        // 重算——不把面板放回来，玩家就卡在"棋盘点不动、又没有任何按钮"。
+        if (_endResolved && battle.isOver) _showResult = true;
+      }),
+      onSelectLevel: (index) {
+        setState(() => _showMenu = false);
+        _startLevel(index);
+      },
+      onRestartLevel: () {
+        setState(() => _showMenu = false);
+        _startLevel(_levelIndex);
+      },
+      onHelp: () => setState(() {
+        _showMenu = false;
+        _showHelp = true;
+      }),
+      onNewRun: () {
+        setState(() => _showMenu = false);
+        _restartCampaign();
+      },
+      onExitToMenu: widget.onExitToMenu,
+    );
+  }
+
   Widget _resultOverlay(LevelDef level) {
     final won = battle.isWon;
-    final lastLevel = _levelIndex >= Campaign.levels.length - 1;
+    final endless = widget.mode == GameMode.endless;
+    final lastLevel = !endless && _levelIndex >= Campaign.levels.length - 1;
     return Positioned.fill(
       child: Container(
-        color: Colors.black.withValues(alpha: 0.72),
+        color: Colors.black.withValues(alpha: 0.84),
         child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                won ? (_campaignClear ? '通关' : '胜利') : '败北',
-                style: AppText.title.copyWith(
-                  fontSize: 44,
-                  color: won ? Palette.gold : Palette.danger,
-                  letterSpacing: 8,
+          // 结算内容有自己的底板：直接压在棋盘上时分不清哪行字属于面板。
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 26, vertical: 28),
+            decoration: BoxDecoration(
+              color: Palette.panel.withValues(alpha: 0.96),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(color: Palette.panelEdge),
+              boxShadow: [
+                BoxShadow(
+                  color: (won ? Palette.gold : Palette.danger).withValues(alpha: 0.18),
+                  blurRadius: 40,
+                  spreadRadius: 2,
                 ),
-              ),
-              const SizedBox(height: 14),
-              Text(
-                won
-                    ? (_campaignClear ? '你击碎了最后的黑' : '${level.enemy.name} 已被击败')
-                    : '再来一次',
-                style: AppText.label.copyWith(fontSize: 13),
-              ),
-              const SizedBox(height: 26),
-              _statRow('回合数', '$_turnsThisLevel'),
-              _statRow('剩余生命', '${battle.playerHp}'),
-              const SizedBox(height: 28),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              ],
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 26),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (won && !lastLevel)
-                    _primaryButton('进入下一关', () => _startLevel(_levelIndex + 1)),
-                  if (won && lastLevel)
-                    _primaryButton('重新开始', () => _restartCampaign()),
-                  if (!won) ...[
-                    _primaryButton('重试本关', () => _startLevel(_levelIndex)),
-                    const SizedBox(width: 12),
-                    _ghostButton('回到第一关', () => _restartCampaign()),
+                  Text(
+                    won ? (_campaignClear ? '通关' : '胜利') : (endless ? '终局' : '败北'),
+                    style: AppText.title.copyWith(
+                      fontSize: 44,
+                      color: won ? Palette.gold : Palette.danger,
+                      letterSpacing: 8,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  if (won) _starRow(),
+                  const SizedBox(height: 10),
+                  Text(
+                    won
+                        ? (_campaignClear
+                            ? '你击碎了最后的黑'
+                            : endless
+                                ? '${level.enemy.name} 已被击退'
+                                : '${level.enemy.name} 已被击败')
+                        : (endless ? '倒在第 ${_levelIndex + 1} 波' : '再来一次'),
+                    style: AppText.label.copyWith(fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 22),
+                  // 有强化可选时把战绩压成两行：三张强化卡才是这一屏的主角，
+                  // 320 像素的小屏上给它们腾出空间，免得要滚动才看得全。
+                  if (_offer.isNotEmpty)
+                    Text(
+                      '连击 x$_maxCombo · 总伤害 $_totalDamage\n'
+                      '$_turnsThisLevel 回合 · 剩余生命 ${battle.playerHp}',
+                      style: AppText.label.copyWith(fontSize: 12, height: 1.9),
+                      textAlign: TextAlign.center,
+                    )
+                  else ...[
+                    if (won) _statRow('最大连击', 'x$_maxCombo'),
+                    if (won) _statRow('总伤害', '$_totalDamage'),
+                    _statRow('回合数', '$_turnsThisLevel'),
+                    _statRow('剩余生命', '${battle.playerHp}'),
                   ],
+                  if (won) ...[
+                    const SizedBox(height: 6),
+                    if (endless)
+                      Text(
+                        '最佳 ${settings.endlessBest} 波',
+                        style: AppText.label.copyWith(fontSize: 11),
+                      )
+                    else
+                      Text(
+                        '最佳 ${settings.starsOf(_levelIndex)} 星 · '
+                        '${settings.turnsOf(_levelIndex)} 回合',
+                        style: AppText.label.copyWith(fontSize: 11),
+                      ),
+                  ],
+                  const SizedBox(height: 22),
+                  // 胜利且还有下一关：这里不是"继续"按钮，而是三选一。
+                  // 每一次选择都会跟着玩家走进下一关，这是全局唯一的成长曲线。
+                  if (_offer.isNotEmpty)
+                    _upgradePicker()
+                  else
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 12,
+                      runSpacing: 10,
+                      children: [
+                        if (won && lastLevel)
+                          _primaryButton('重新开始', () => _restartCampaign()),
+                        // 无尽模式连强化池都叠满了，这一波之后没有牌可发——
+                        // 但路必须留着，否则玩家只能退到主菜单重打当前波。
+                        if (won && endless && _offer.isEmpty)
+                          _primaryButton('继续下一波', () => _startLevel(_levelIndex + 1)),
+                        if (!won && endless) ...[
+                          _primaryButton('再来一局', () => _restartCampaign()),
+                        ],
+                        if (!won && !endless) ...[
+                          _primaryButton('重试本关', () => _startLevel(_levelIndex)),
+                          _ghostButton('回到第一关', () => _restartCampaign()),
+                        ],
+                        // 空断言在这里会炸：预览 / 测试里的 GameScreen 是根
+                        // 页面，本来就没有"回到主菜单"这个去处。
+                        if (widget.onExitToMenu != null)
+                          _ghostButton('回到主菜单', widget.onExitToMenu!),
+                        if (!endless)
+                          _ghostButton('关卡选择', () => setState(() {
+                            _showResult = false;
+                            _showMenu = true;
+                          })),
+                      ],
+                    ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _upgradePicker() {
+    final total = _taken.values.fold<int>(0, (sum, n) => sum + n);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.auto_awesome, size: 14, color: Palette.gold),
+            const SizedBox(width: 6),
+            Text(
+              '选择一项强化',
+              style: AppText.label.copyWith(color: Palette.gold, fontSize: 12),
+            ),
+            const Spacer(),
+            if (total > 0)
+              Text(
+                '已有 $total 层',
+                style: AppText.label.copyWith(fontSize: 10.5),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        for (final upgrade in _offer) _upgradeCard(upgrade),
+        const SizedBox(height: 4),
+        Center(
+          child: Text(
+            '选中的强化会一直带到最后一关',
+            style: AppText.label.copyWith(fontSize: 10.5),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _upgradeCard(Upgrade upgrade) {
+    final color = Color(upgrade.themeColor);
+    final stacks = _taken[upgrade.id] ?? 0;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: Semantics(
+        button: true,
+        label: '${upgrade.name}，${upgrade.desc}',
+        excludeSemantics: true,
+        child: GestureDetector(
+          onTap: () => _takeUpgrade(upgrade),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(11, 10, 12, 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              gradient: LinearGradient(
+                colors: [
+                  color.withValues(alpha: 0.20),
+                  color.withValues(alpha: 0.06),
+                ],
+              ),
+              border: Border.all(color: color.withValues(alpha: 0.62), width: 1.2),
+              boxShadow: [
+                BoxShadow(color: color.withValues(alpha: 0.22), blurRadius: 16),
+              ],
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 38,
+                  height: 38,
+                  // 图标本身是静态的，加一层 RepaintBoundary 免得跟着面板一起重绘。
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      painter: _UpgradeGlyphPainter(upgrade.icon, color),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              upgrade.name,
+                              style: AppText.button.copyWith(
+                                fontSize: 15,
+                                color: Palette.textPrimary,
+                                letterSpacing: 1,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (stacks > 0) ...[
+                            const SizedBox(width: 6),
+                            Text(
+                              '已有 x$stacks',
+                              style: AppText.label.copyWith(fontSize: 10, color: color),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        upgrade.desc,
+                        style: AppText.label.copyWith(
+                          fontSize: 11.5,
+                          height: 1.35,
+                          color: Palette.textPrimary.withValues(alpha: 0.82),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(Icons.chevron_right, size: 20, color: color.withValues(alpha: 0.8)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _starRow() {
+    final stars = _starsEarned;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        for (var i = 0; i < 3; i++)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: Icon(
+              i < stars ? Icons.star_rounded : Icons.star_outline_rounded,
+              size: 34,
+              color: i < stars ? Palette.gold : Palette.panelEdge,
+            ),
+          ),
+      ],
     );
   }
 
@@ -792,7 +1587,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   Widget _primaryButton(String label, VoidCallback onTap) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        sfx.tap();
+        onTap();
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 13),
         decoration: BoxDecoration(
@@ -812,7 +1610,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   Widget _ghostButton(String label, VoidCallback onTap) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        sfx.tap();
+        onTap();
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         decoration: BoxDecoration(
@@ -824,8 +1625,12 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     );
   }
 
+  /// 重开一局：清空全部强化，从第一关重新来过。
   void _restartCampaign() {
-    _carryHp = Campaign.player.maxHp;
+    _taken.clear();
+    _offer = const [];
+    _profile = Campaign.player;
+    _carryHp = _profile.maxHp;
     _startLevel(0);
   }
 
@@ -834,87 +1639,46 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       child: GestureDetector(
         onTap: () => setState(() => _showHelp = false),
         child: Container(
-          color: Colors.black.withValues(alpha: 0.78),
+          color: Colors.black.withValues(alpha: 0.80),
           child: Center(
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 28),
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Palette.panel,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: Palette.panelEdge),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('玩法说明', style: AppText.title.copyWith(fontSize: 18)),
-                  const SizedBox(height: 14),
-                  for (final type in GemType.values)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 5),
-                      child: Row(
-                        children: [
-                          _miniGem(type),
-                          const SizedBox(width: 12),
-                          Text(
-                            gemEffectLabel(type),
-                            style: AppText.label.copyWith(
-                              fontSize: 12.5,
-                              color: Palette.textPrimary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  const SizedBox(height: 14),
-                  Text(
-                    '· 三连消除，四连生成破空宝石（整行/整列），五连生成棱镜（清空同色），\n'
-                    '  拐角消除生成爆裂宝石（3x3）。\n'
-                    '· 与强化宝石交换可以直接引爆它。\n'
-                    '· 怒气满 100 可释放必杀「斩月」：十字清除并按倍率结算。\n'
-                    '· 注意敌方行动回合，及时用护盾与治疗抵挡。',
-                    style: AppText.label.copyWith(fontSize: 11.5, height: 1.75),
-                  ),
-                  const SizedBox(height: 18),
-                  Center(
-                    child: Text('点击任意处关闭', style: AppText.label.copyWith(fontSize: 11)),
-                  ),
-                ],
-              ),
-            ),
+            child: HelpPanel(onClose: () => setState(() => _showHelp = false)),
           ),
         ),
       ),
     );
   }
-
-  Widget _miniGem(GemType type) {
-    return SizedBox(
-      width: 30,
-      height: 30,
-      child: CustomPaint(painter: _MiniGemPainter(type)),
-    );
-  }
 }
 
-/// 帮助面板里的宝石图标，直接复用棋盘上的宝石美术。
-class _MiniGemPainter extends CustomPainter {
-  final GemType type;
+/// 强化卡片上的图标。绘制逻辑在 [UpgradeArt] 里，这里只做一层画家适配。
+class _UpgradeGlyphPainter extends CustomPainter {
+  final UpgradeIcon icon;
+  final Color color;
 
-  const _MiniGemPainter(this.type);
+  const _UpgradeGlyphPainter(this.icon, this.color);
 
   @override
   void paint(Canvas canvas, Size size) {
-    GemArt.paint(
+    UpgradeArt.paint(
       canvas,
       Rect.fromLTWH(0, 0, size.width, size.height),
-      type,
-      SpecialKind.none,
-      glow: 0.5,
+      icon,
+      color,
+      glow: 0.6,
     );
   }
 
   @override
-  bool shouldRepaint(covariant _MiniGemPainter oldDelegate) => oldDelegate.type != type;
+  bool shouldRepaint(covariant _UpgradeGlyphPainter old) =>
+      old.icon != icon || old.color != color;
 }
+
+/// 一档连锁反馈的样式。
+class _ComboTier {
+  final String text;
+  final Color color;
+  final double size;
+  final double shake;
+
+  const _ComboTier(this.text, this.color, this.size, this.shake);
+}
+

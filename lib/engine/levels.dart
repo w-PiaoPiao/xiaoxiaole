@@ -57,6 +57,9 @@ class EnemyDef {
   /// 生命低于该比例时狂暴（0 表示不会狂暴）。
   final double enrageAt;
 
+  /// 命中玩家时夺走的怒气（「汲魂」机制：打得越狠，必杀来得越慢）。
+  final int rageDrain;
+
   /// 章节配色（用于光效）。
   final int themeColor;
 
@@ -76,6 +79,7 @@ class EnemyDef {
     this.healBlockTurns = 0,
     this.drainRatio = 0,
     this.enrageAt = 0,
+    this.rageDrain = 0,
   });
 
   bool get enrages => enrageAt > 0;
@@ -96,7 +100,11 @@ class LevelDef {
   });
 }
 
-/// 玩家在一局中的成长参数（目前全局固定，便于后续做升级系统）。
+/// 玩家在一局中的成长参数。
+///
+/// 这是一个**不可变**值对象：一次挑战（campaign）从 [Campaign.player] 出发，
+/// 每打完一关挑一条 [Upgrade]，用 [copyWith] 换出一份新的档案。战斗只读取它、
+/// 从不修改它，因此跨关卡的成长不会反过来污染全局默认值。
 class PlayerProfile {
   final int maxHp;
   final int redDamage;
@@ -111,11 +119,35 @@ class PlayerProfile {
   final int ultimateBonusDamage;
   final double ultimateMultiplier;
 
+  /// 暴击概率。基础为 0——暴击是打强化才解锁的爽点，不该一开始就随机。
+  final double critChance;
+
+  /// 暴击伤害倍率。
+  final double critMultiplier;
+
+  /// 连锁倍率的上限（基础 2.5 倍）。
+  final double comboCap;
+
+  /// 强化宝石额外伤害的倍率。
+  final double specialPower;
+
+  /// 每一层易伤提供的伤害加成（基础 12%）。
+  final double curseBonus;
+
+  /// 每个玩家回合开始时回复的生命。
+  final int regenPerTurn;
+
+  /// 受到的伤害减免比例。
+  final double damageReduction;
+
+  /// 生命低于 [desperateThreshold] 时的伤害加成。
+  final double desperateBonus;
+
   const PlayerProfile({
     this.maxHp = 300,
     this.redDamage = 26,
-    this.blueShield = 20,
-    this.greenHeal = 28,
+    this.blueShield = 13,
+    this.greenHeal = 21,
     this.yellowRage = 9,
     this.purpleCurse = 1,
     this.maxShield = 250,
@@ -124,7 +156,67 @@ class PlayerProfile {
     this.ultimateCost = 100,
     this.ultimateBonusDamage = 150,
     this.ultimateMultiplier = 1.6,
+    this.critChance = 0,
+    this.critMultiplier = 2.0,
+    this.comboCap = 2.5,
+    this.specialPower = 1.0,
+    this.curseBonus = 0.12,
+    this.regenPerTurn = 0,
+    this.damageReduction = 0,
+    this.desperateBonus = 0,
   });
+
+  /// 生命低于这个比例时进入「逆境」，触发 [desperateBonus]。
+  static const double desperateThreshold = 0.4;
+
+  /// 减伤的上限：再厚的强化也不能变成完全免伤。
+  static const double maxDamageReduction = 0.6;
+
+  PlayerProfile copyWith({
+    int? maxHp,
+    int? redDamage,
+    int? blueShield,
+    int? greenHeal,
+    int? yellowRage,
+    int? purpleCurse,
+    int? maxShield,
+    int? maxRage,
+    int? maxCurseStacks,
+    int? ultimateCost,
+    int? ultimateBonusDamage,
+    double? ultimateMultiplier,
+    double? critChance,
+    double? critMultiplier,
+    double? comboCap,
+    double? specialPower,
+    double? curseBonus,
+    int? regenPerTurn,
+    double? damageReduction,
+    double? desperateBonus,
+  }) {
+    return PlayerProfile(
+      maxHp: maxHp ?? this.maxHp,
+      redDamage: redDamage ?? this.redDamage,
+      blueShield: blueShield ?? this.blueShield,
+      greenHeal: greenHeal ?? this.greenHeal,
+      yellowRage: yellowRage ?? this.yellowRage,
+      purpleCurse: purpleCurse ?? this.purpleCurse,
+      maxShield: maxShield ?? this.maxShield,
+      maxRage: maxRage ?? this.maxRage,
+      maxCurseStacks: maxCurseStacks ?? this.maxCurseStacks,
+      ultimateCost: ultimateCost ?? this.ultimateCost,
+      ultimateBonusDamage: ultimateBonusDamage ?? this.ultimateBonusDamage,
+      ultimateMultiplier: ultimateMultiplier ?? this.ultimateMultiplier,
+      critChance: critChance ?? this.critChance,
+      critMultiplier: critMultiplier ?? this.critMultiplier,
+      comboCap: comboCap ?? this.comboCap,
+      specialPower: specialPower ?? this.specialPower,
+      curseBonus: curseBonus ?? this.curseBonus,
+      regenPerTurn: regenPerTurn ?? this.regenPerTurn,
+      damageReduction: damageReduction ?? this.damageReduction,
+      desperateBonus: desperateBonus ?? this.desperateBonus,
+    );
+  }
 }
 
 /// 五个关卡 + 终局 BOSS。
@@ -139,12 +231,13 @@ class Campaign {
       enemy: EnemyDef(
         id: 'wisp',
         name: '迷雾鬼火',
-        title: '徘徊的残念',
-        taunt: '「又一个闯入者……陪我玩会儿吧。」',
+        title: '窃魂的低语',
+        taunt: '「把你的怒火……留给我，好吗？」',
         archetype: EnemyArchetype.wisp,
-        maxHp: 2200,
-        attack: 40,
+        maxHp: 2600,
+        attack: 62,
         turnsPerAttack: 3,
+        rageDrain: 8,
         themeColor: 0xFF57E0C8,
       ),
     ),
@@ -158,10 +251,10 @@ class Campaign {
         title: '沉默的门扉',
         taunt: '「此路不通。」',
         archetype: EnemyArchetype.guardian,
-        maxHp: 2800,
-        attack: 66,
+        maxHp: 3600,
+        attack: 118,
         turnsPerAttack: 3,
-        shieldRegen: 34,
+        shieldRegen: 42,
         heavyEvery: 3,
         themeColor: 0xFFE0A94A,
       ),
@@ -176,8 +269,8 @@ class Campaign {
         title: '无声的追猎者',
         taunt: '「你眨眼的功夫，就够了。」',
         archetype: EnemyArchetype.assassin,
-        maxHp: 3200,
-        attack: 72,
+        maxHp: 4400,
+        attack: 106,
         turnsPerAttack: 2,
         heavyEvery: 3,
         heavyMultiplier: 2.0,
@@ -194,10 +287,10 @@ class Campaign {
         title: '织咒之人',
         taunt: '「你的伤口，不会再愈合了。」',
         archetype: EnemyArchetype.witch,
-        maxHp: 3600,
-        attack: 112,
+        maxHp: 5300,
+        attack: 162,
         turnsPerAttack: 3,
-        healBlockTurns: 3,
+        healBlockTurns: 4,
         shieldRegen: 20,
         themeColor: 0xFFE85A7A,
       ),
@@ -212,8 +305,8 @@ class Campaign {
         title: '契约的持有者',
         taunt: '「把心交给我，我就不疼了。」',
         archetype: EnemyArchetype.enchantress,
-        maxHp: 4000,
-        attack: 130,
+        maxHp: 6300,
+        attack: 170,
         turnsPerAttack: 3,
         heavyEvery: 3,
         shieldRegen: 30,
@@ -231,12 +324,12 @@ class Campaign {
         title: '吞噬一切的黑',
         taunt: '「你打赢的一切，都会成为我的一部分。」',
         archetype: EnemyArchetype.warlord,
-        maxHp: 4400,
-        attack: 126,
+        maxHp: 7400,
+        attack: 158,
         turnsPerAttack: 2,
         heavyEvery: 3,
         heavyMultiplier: 1.7,
-        drainRatio: 0.18,
+        drainRatio: 0.22,
         shieldRegen: 20,
         enrageAt: 0.35,
         themeColor: 0xFFB44BFF,

@@ -223,11 +223,28 @@ class UltimateFx {
   static double randomTilt(math.Random rng) => (rng.nextDouble() - 0.5) * 0.5;
 }
 
+/// 一个只能由持有者触发的重绘信号。
+///
+/// 棋盘只在真的"有东西在动"时才需要重画：宝石全部落定、没有粒子、没有选中
+/// 脉冲时，整块棋盘是静止的——而玩家思考落点的时间占了一局里的大半。
+class RepaintSignal extends ChangeNotifier {
+  void ping() => notifyListeners();
+}
+
 /// 所有动画与特效的统一驱动器。
 ///
 /// 由 `GameScreen` 每帧调用 [tick]，把逻辑层的棋盘快照转换成位置、缩放、
 /// 粒子等视觉状态；各个 CustomPainter 只负责按当前状态绘制。
 class FxController extends ChangeNotifier {
+  /// 棋盘重绘信号：棋盘的 painter 监听它，而不是 [FxController] 本身。
+  final RepaintSignal boardRepaint = RepaintSignal();
+
+  /// 由 BoardView 每帧告知：棋盘上是否有依赖时间的持续脉冲（选中的呼吸、
+  /// 落子提示的闪烁）。有的话棋盘每帧都要重绘。
+  bool boardPulse = false;
+
+  bool _boardDirty = true;
+
   final Map<int, GemVisual> gems = {};
   final List<DyingGem> dying = [];
   final List<Particle> particles = [];
@@ -266,12 +283,20 @@ class FxController extends ChangeNotifier {
   /// 消散动画的目标值，由 GameScreen 在胜负判定后设置。
   double dissolveTarget = 0;
 
+  /// 屏幕震动开关（设置里可关，系统的"减少动态效果"也会把它关掉）。
+  bool allowShake = true;
+
+  /// 白闪/红闪开关。光敏或前庭敏感的用户可以关掉，游戏逻辑不受影响。
+  bool allowFlash = true;
+
+  /// 系统开启了「减少动态效果」。除了震屏与闪光（由 [allowShake] /
+  /// [allowFlash] 一并关掉），命中定格的全屏慢动作与粒子预算也要收敛——
+  /// 它们才是整套演出里最"晃"的部分。
+  bool reducedMotion = false;
+
   final math.Random _rng = math.Random();
 
   Completer<void>? _settle;
-
-  /// 是否所有视觉元素都已落定（供自检使用）。
-  bool get isSettled => _allSettled;
 
   bool get _allSettled {
     if (gems.values.any((g) => g.moving || g.birth < 1)) return false;
@@ -296,7 +321,9 @@ class FxController extends ChangeNotifier {
   void tick(double dt) {
     // 命中定格：命中瞬间把时间放慢到 1/10，形成"顿一下"的打击感。
     // 注意先用真实 dt 扣减，否则定格永远退不掉。
-    if (hitStop > 0) {
+    if (reducedMotion) {
+      hitStop = 0;
+    } else if (hitStop > 0) {
       hitStop = math.max(0, hitStop - dt);
       dt *= 0.1;
     }
@@ -372,7 +399,36 @@ class FxController extends ChangeNotifier {
       _settle = null;
       completer!.complete();
     }
+
+    // 棋盘该不该重画：这一帧在动，或者上一帧还在动（动画刚停的那一帧也要
+    // 把最终位置画出来）。
+    final dirty = _computeBoardDirty();
+    if (dirty || _boardDirty) boardRepaint.ping();
+    _boardDirty = dirty;
+
     notifyListeners();
+  }
+
+  /// 棋盘上是否还有正在变化的东西。
+  bool _computeBoardDirty() {
+    if (boardPulse) return true;
+    if (dying.isNotEmpty || particles.isNotEmpty || rings.isNotEmpty || labels.isNotEmpty) {
+      return true;
+    }
+    for (final gem in gems.values) {
+      if (gem.moving || gem.birth < 1 || gem.glow > 0.01 || gem.flash > 0.01) return true;
+      // 棱镜的彩色环一直在转
+      if (gem.special == SpecialKind.prism) return true;
+    }
+    return false;
+  }
+
+  /// 震屏偏移（像素）。用两个不同频率的正弦合成，比纯随机更"有力"，
+  /// 也不会因为随机抖动显得噪。
+  Offset get shakeOffset {
+    if (shake <= 0.05) return Offset.zero;
+    final t = time * 60;
+    return Offset(math.sin(t * 1.7) * shake, math.cos(t * 2.3) * shake * 0.6);
   }
 
   static double _easeOutCubic(double t) {
@@ -441,6 +497,17 @@ class FxController extends ChangeNotifier {
 
   /// 播放一批宝石的消散效果。
   void beginClear(List<ClearedGem> cleared) {
+    // 一次清掉几十颗（组合技、棱镜）时按颗数削减粒子预算。
+    // 每颗都炸满的话，39 颗就是近 300 个粒子 + 39 个圆环，一帧光画圆就要
+    // 好几毫秒；而且命中定格会把时间放慢到 1/10，粒子在屏幕上留得更久，
+    // 峰值还会更高。少几颗碎屑肉眼看不出来，掉帧看得出来。
+    var perGem = switch (cleared.length) {
+      > 28 => 3,
+      > 16 => 5,
+      _ => 7,
+    };
+    // 「减少动态效果」下再砍一半：爆发粒子是屏幕上变化最剧烈的东西。
+    if (reducedMotion) perGem = math.max(1, perGem ~/ 2);
     for (final c in cleared) {
       final visual = gems[c.gemId];
       final gx = visual?.x ?? (c.index % BoardEngine.cols).toDouble();
@@ -452,13 +519,13 @@ class FxController extends ChangeNotifier {
         special: c.special,
       ));
       gems.remove(c.gemId);
-      _burstAt(gx, gy, c.type, c.special);
+      _burstAt(gx, gy, c.type, c.special, budget: perGem);
     }
   }
 
-  void _burstAt(double gx, double gy, GemType type, SpecialKind special) {
+  void _burstAt(double gx, double gy, GemType type, SpecialKind special, {int budget = 7}) {
     final color = Palette.gem(type);
-    final count = special == SpecialKind.none ? 7 : 14;
+    final count = special == SpecialKind.none ? budget : budget * 2;
     for (var i = 0; i < count; i++) {
       final angle = _rng.nextDouble() * math.pi * 2;
       final speed = 1.4 + _rng.nextDouble() * 3.0;
@@ -490,7 +557,11 @@ class FxController extends ChangeNotifier {
       x: gx + 0.5,
       y: gy + 0.5,
       color: Colors.white,
-      maxRadius: activation.kind == SpecialKind.prism ? 7.0 : 3.4,
+      // 冲击波的大小跟着实际清除范围走：单颗破空是 8 格、组合技的十字是
+      // 15 格、同色风暴能到 50 格以上，用同一个半径就分不出轻重了。
+      maxRadius: activation.kind == SpecialKind.prism
+          ? 7.0
+          : (2.0 + activation.area.length * 0.16).clamp(2.6, 6.5),
       width: 0.26,
       duration: 0.5,
     ));
@@ -515,11 +586,8 @@ class FxController extends ChangeNotifier {
   }
 
   void shakeBy(double amount) {
+    if (!allowShake) return;
     shake = math.max(shake, amount);
-  }
-
-  void flashEnemy() {
-    enemyFlash = 1;
   }
 
   void lunge() {
@@ -556,18 +624,21 @@ class FxController extends ChangeNotifier {
   }
 
   /// 命中：白闪 + 后仰 + 定格。[damage] 越大打得越重。
-  void hitImpact({required int damage}) {
+  ///
+  /// [crit] 为 true 时把这一次的演出整体加重——暴击的意义就在于
+  /// "和普通一击明显不一样"，只多跳个数字是不够的。
+  void hitImpact({required int damage, bool crit = false}) {
     final weight = (0.55 + damage / 220).clamp(0.55, 1.5);
-    hitStop = math.max(hitStop, 0.05 * weight);
-    enemyRecoil = math.min(1.0, enemyRecoil + 0.55 * weight);
-    enemyFlash = 1;
+    hitStop = math.max(hitStop, (crit ? 0.11 : 0.05) * weight);
+    enemyRecoil = math.min(1.0, enemyRecoil + (crit ? 0.9 : 0.55) * weight);
+    if (allowFlash) enemyFlash = 1;
   }
 
   void triggerUltimate() {
     ultimate = UltimateFx(tilt: UltimateFx.randomTilt(_rng));
     hitStop = math.max(hitStop, 0.09);
     enemyRecoil = 1;
-    enemyFlash = 1;
+    if (allowFlash) enemyFlash = 1;
   }
 
   /// 重开一局时清空所有视觉状态。

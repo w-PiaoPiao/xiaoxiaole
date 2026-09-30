@@ -91,13 +91,62 @@ void main() {
       expect(events.any((e) => e.kind == CombatEventKind.special), isTrue);
       expect(state.enemyHp, def.maxHp - 3 * Campaign.player.redDamage - 80);
     });
+
+    test('强化宝石的额外伤害只算一笔：playerDamage 事件之和等于实际掉血', () {
+      // UI 的伤害飘字与结算面板的「总伤害」只统计 playerDamage——它必须
+      // 等于真正扣掉的血量。special 事件是"这一下有强化加成"的标记，
+      // 它的数值已经包含在 playerDamage 里了，再累加一遍就会虚报。
+      final state = newBattle(0);
+      final events = state.applyClear({GemType.red: 3}, combo: 1, specialBonus: 80);
+      final dealt = events
+          .where((e) => e.kind == CombatEventKind.playerDamage)
+          .fold<int>(0, (sum, e) => sum + e.amount);
+      expect(dealt, def.maxHp - state.enemyHp);
+    });
+  });
+
+  group('敌方攻击预警', () {
+    test('重击被单次伤害上限截断，预警与实际伤害完全一致', () {
+      // 第五关的魔女：攻击 170、每 3 次一记 1.8 倍重击 —— 重击本身会顶穿
+      // 「单次伤害不超过最大生命 65%」的封顶，预警必须按封顶后的值报。
+      final state = BattleState(def: Campaign.levels[4].enemy, levelIndex: 4);
+      state.attackCount = 2; // 下一次（第 3 次）就是重击
+      expect(state.nextAttackIsHeavy, isTrue);
+
+      final predicted = state.incomingDamage;
+      expect(predicted, (Campaign.player.maxHp * BattleState.singleHitCapRatio).round());
+
+      for (var i = 0; i < state.def.turnsPerAttack; i++) {
+        state.endPlayerTurn();
+      }
+      expect(Campaign.player.maxHp - state.playerHp, predicted,
+          reason: '预警写着多少，落下来就该是多少');
+    });
+
+    test('「硬化」减伤同样计入预警', () {
+      final profile = Campaign.player.copyWith(damageReduction: 0.4);
+      final state = BattleState(
+        def: Campaign.levels[1].enemy,
+        levelIndex: 1,
+        profile: profile,
+      );
+      state.attackCount = 2; // 守卫每 3 次重击一次，下一次正好是第 3 次
+      expect(state.nextAttackIsHeavy, isTrue);
+
+      final predicted = state.incomingDamage;
+      expect(predicted, (Campaign.levels[1].enemy.attack * 1.8 * 0.6).round());
+
+      for (var i = 0; i < state.def.turnsPerAttack; i++) {
+        state.endPlayerTurn();
+      }
+      expect(profile.maxHp - state.playerHp, predicted);
+    });
   });
 
   group('敌方回合', () {
     test('到达攻击回合时出手，护盾优先抵挡', () {
       final state = newBattle(0);
-      state.applyClear({GemType.blue: 5}, combo: 1); // 100 点护盾
-      expect(state.shield, 100);
+      state.shield = 100;
 
       for (var i = 0; i < def.turnsPerAttack - 1; i++) {
         final events = state.endPlayerTurn();
@@ -108,7 +157,7 @@ void main() {
 
       final events = state.endPlayerTurn();
       expect(events.any((e) => e.kind == CombatEventKind.enemyAttack), isTrue);
-      // 36 点伤害全部被 100 点护盾吸收
+      // 第一关的攻击（62 点）全部被 100 点护盾吸收
       expect(state.shield, 100 - def.attack);
       expect(state.playerHp, Campaign.player.maxHp);
       expect(state.turnsToAttack, def.turnsPerAttack, reason: '攻击后重新计时');

@@ -1,5 +1,4 @@
-import 'dart:math' as math;
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'palette.dart';
@@ -17,6 +16,12 @@ class EnergyBar extends StatelessWidget {
   final String? leading;
   final bool flip;
 
+  /// 条上的刻度位置（0~1），用来提示"到这里敌人会狂暴"这类阈值。
+  final List<double> markers;
+
+  /// 读屏软件朗读的内容。为 null 时退化为 leading/trailing 的文字。
+  final String? semanticLabel;
+
   const EnergyBar({
     super.key,
     required this.value,
@@ -26,35 +31,50 @@ class EnergyBar extends StatelessWidget {
     this.trailing,
     this.leading,
     this.flip = false,
+    this.markers = const [],
+    this.semanticLabel,
   });
 
   @override
   Widget build(BuildContext context) {
     final v = value.clamp(0.0, 1.0);
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: v),
-      duration: const Duration(milliseconds: 420),
-      curve: Curves.easeOutCubic,
-      builder: (context, animated, _) {
-        return TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0, end: shieldValue.clamp(0.0, 1.0)),
-          duration: const Duration(milliseconds: 260),
-          builder: (context, shield, _) {
-            return _Bar(
-              value: animated,
-              shield: shield,
-              color: color,
-              height: height,
-              trailing: trailing,
-              leading: leading,
-              flip: flip,
-            );
-          },
-        );
-      },
+    final label = semanticLabel ??
+        [if (leading != null) leading, if (trailing != null) trailing].join(' ');
+    return Semantics(
+      label: label.isEmpty ? null : label,
+      // 条内的文字只作为朗读内容，不必再单独播报一遍。
+      excludeSemantics: true,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: v),
+        duration: const Duration(milliseconds: 420),
+        curve: Curves.easeOutCubic,
+        builder: (context, animated, _) {
+          return TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: shieldValue.clamp(0.0, 1.0)),
+            duration: const Duration(milliseconds: 260),
+            builder: (context, shield, _) {
+              return _Bar(
+                value: animated,
+                shield: shield,
+                color: color,
+                height: height,
+                trailing: trailing,
+                leading: leading,
+                flip: flip,
+                markers: markers,
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
+
+/// 文字标签的宽度上限。条本身的长度由剩余空间决定，但文字再多也不能
+/// 把条挤没——超出部分直接省略号（小屏 + 大字体时必须有个上限）。
+const double _kLeadingMaxWidth = 64;
+const double _kTrailingMaxWidth = 118;
 
 class _Bar extends StatelessWidget {
   final double value;
@@ -64,6 +84,7 @@ class _Bar extends StatelessWidget {
   final String? trailing;
   final String? leading;
   final bool flip;
+  final List<double> markers;
 
   const _Bar({
     required this.value,
@@ -73,6 +94,7 @@ class _Bar extends StatelessWidget {
     required this.trailing,
     required this.leading,
     required this.flip,
+    required this.markers,
   });
 
   @override
@@ -80,7 +102,15 @@ class _Bar extends StatelessWidget {
     return Row(
       children: [
         if (leading != null) ...[
-          Text(leading!, style: AppText.label),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _kLeadingMaxWidth),
+            child: Text(
+              leading!,
+              style: AppText.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
           const SizedBox(width: 6),
         ],
         Expanded(
@@ -92,13 +122,22 @@ class _Bar extends StatelessWidget {
                 shield: shield,
                 color: color,
                 flip: flip,
+                markers: markers,
               ),
             ),
           ),
         ),
         if (trailing != null) ...[
           const SizedBox(width: 8),
-          Text(trailing!, style: AppText.number),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _kTrailingMaxWidth),
+            child: Text(
+              trailing!,
+              style: AppText.number,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ],
     );
@@ -110,12 +149,14 @@ class _BarPainter extends CustomPainter {
   final double shield;
   final Color color;
   final bool flip;
+  final List<double> markers;
 
   _BarPainter({
     required this.value,
     required this.shield,
     required this.color,
     required this.flip,
+    required this.markers,
   });
 
   @override
@@ -192,11 +233,35 @@ class _BarPainter extends CustomPainter {
           ..color = Colors.white.withValues(alpha: 0.7),
       );
     }
+
+    // 刻度：提示阈值（例如敌人的狂暴线）。画在最上层，任何填充都盖不住。
+    for (final marker in markers) {
+      if (marker <= 0.001 || marker >= 0.999) continue;
+      final x = size.width * marker;
+      canvas.drawLine(
+        Offset(x, 0),
+        Offset(x, size.height),
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.55)
+          ..strokeWidth = 2.4,
+      );
+      canvas.drawLine(
+        Offset(x, 0),
+        Offset(x, size.height),
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.85)
+          ..strokeWidth = 1.1,
+      );
+    }
   }
 
   @override
   bool shouldRepaint(covariant _BarPainter old) =>
-      old.value != value || old.shield != shield || old.color != color;
+      old.value != value ||
+      old.shield != shield ||
+      old.color != color ||
+      old.flip != flip ||
+      !listEquals(old.markers, markers);
 }
 
 /// 小标签（避免与 Material 的 Chip 重名）。
@@ -216,44 +281,51 @@ class Tag extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: dense ? 6 : 9,
-        vertical: dense ? 2 : 4,
-      ),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withValues(alpha: 0.55), width: 1),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (icon != null) ...[
-            Icon(icon, size: dense ? 11 : 13, color: color),
-            const SizedBox(width: 4),
-          ],
-          Text(
-            text,
-            style: TextStyle(
-              color: color,
-              fontSize: dense ? 10 : 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1,
+    return Semantics(
+      label: text,
+      excludeSemantics: true,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: dense ? 6 : 9,
+          vertical: dense ? 2 : 4,
+        ),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: color.withValues(alpha: 0.55), width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: dense ? 11 : 13, color: color),
+              const SizedBox(width: 4),
+            ],
+            Flexible(
+              child: Text(
+                text,
+                style: TextStyle(
+                  color: color,
+                  fontSize: dense ? 10 : 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 }
 
-/// 主行动按钮（必杀技）。
-class ActionButton extends StatelessWidget {
+/// 主行动按钮（必杀技）。按下时轻微下压，给出明确的触觉反馈。
+class ActionButton extends StatefulWidget {
   final String label;
   final String? hint;
   final bool enabled;
-  final double progress;
   final Color color;
   final VoidCallback onTap;
 
@@ -261,62 +333,93 @@ class ActionButton extends StatelessWidget {
     super.key,
     required this.label,
     required this.enabled,
-    required this.progress,
     required this.onTap,
     this.hint,
     this.color = Palette.rage,
   });
 
   @override
+  State<ActionButton> createState() => _ActionButtonState();
+}
+
+class _ActionButtonState extends State<ActionButton> {
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (_pressed != value) setState(() => _pressed = value);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          gradient: LinearGradient(
-            colors: enabled
-                ? [color.withValues(alpha: 0.95), color.withValues(alpha: 0.55)]
-                : [Palette.panel, Palette.panel],
-          ),
-          border: Border.all(
-            color: enabled ? Colors.white.withValues(alpha: 0.85) : Palette.panelEdge,
-            width: enabled ? 1.6 : 1,
-          ),
-          boxShadow: enabled
-              ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.55),
-                    blurRadius: 18,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : null,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: AppText.button.copyWith(
-                color: enabled ? const Color(0xFF241300) : Palette.textDim,
-                fontSize: 14,
+    final enabled = widget.enabled;
+    final color = widget.color;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: [widget.label, if (widget.hint != null) widget.hint].join('，'),
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTap: enabled ? widget.onTap : null,
+        onTapDown: enabled ? (_) => _setPressed(true) : null,
+        onTapUp: enabled ? (_) => _setPressed(false) : null,
+        onTapCancel: enabled ? () => _setPressed(false) : null,
+        child: AnimatedScale(
+          scale: _pressed ? 0.94 : 1.0,
+          duration: const Duration(milliseconds: 90),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            constraints: const BoxConstraints(minHeight: 48, minWidth: 84),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              gradient: LinearGradient(
+                colors: enabled
+                    ? [color.withValues(alpha: 0.95), color.withValues(alpha: 0.55)]
+                    : [Palette.panel, Palette.panel],
               ),
+              border: Border.all(
+                color: enabled ? Colors.white.withValues(alpha: 0.85) : Palette.panelEdge,
+                width: enabled ? 1.6 : 1,
+              ),
+              boxShadow: enabled
+                  ? [
+                      BoxShadow(
+                        color: color.withValues(alpha: _pressed ? 0.3 : 0.55),
+                        blurRadius: _pressed ? 8 : 18,
+                        spreadRadius: 1,
+                      ),
+                    ]
+                  : null,
             ),
-            if (hint != null)
-              Text(
-                hint!,
-                style: TextStyle(
-                  color: enabled
-                      ? const Color(0xFF241300).withValues(alpha: 0.75)
-                      : Palette.textDim.withValues(alpha: 0.8),
-                  fontSize: 9.5,
-                  letterSpacing: 0.5,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  widget.label,
+                  style: AppText.button.copyWith(
+                    color: enabled ? const Color(0xFF241300) : Palette.textDim,
+                    fontSize: 14,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-          ],
+                if (widget.hint != null)
+                  Text(
+                    widget.hint!,
+                    style: TextStyle(
+                      color: enabled
+                          ? const Color(0xFF241300).withValues(alpha: 0.75)
+                          : Palette.textDim.withValues(alpha: 0.8),
+                      fontSize: 9.5,
+                      letterSpacing: 0.5,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -324,14 +427,17 @@ class ActionButton extends StatelessWidget {
 }
 
 /// 回合倒计时的小圆点，让玩家一眼看出敌人还有几回合出手。
-class TurnPips extends StatelessWidget {
+///
+/// 语义与旁边的文字一致：**点亮的圆点数量就是剩余回合数**，
+/// 每过一回合从右往左熄灭一个，最后一颗开始脉冲预警。
+///
+/// 脉冲由自己的控制器驱动、且只在预警时运行——这样绝大多数时间里这排圆点
+/// 完全不参与逐帧重建。
+class TurnPips extends StatefulWidget {
   final int total;
   final int remaining;
   final Color color;
   final bool danger;
-
-  /// 动画相位，由调用方传入随时间递增的值来实现呼吸效果。
-  final double phase;
 
   const TurnPips({
     super.key,
@@ -339,16 +445,48 @@ class TurnPips extends StatelessWidget {
     required this.remaining,
     required this.color,
     this.danger = false,
-    this.phase = 0,
   });
 
   @override
-  Widget build(BuildContext context) {
-    final pulse = danger ? 0.6 + 0.4 * math.sin(phase * 8) : 1.0;
+  State<TurnPips> createState() => _TurnPipsState();
+}
+
+class _TurnPipsState extends State<TurnPips> with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 700),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.danger) _pulse.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(TurnPips oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.danger && !_pulse.isAnimating) {
+      _pulse.repeat(reverse: true);
+    } else if (!widget.danger && _pulse.isAnimating) {
+      _pulse.stop();
+      _pulse.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  Widget _row(double pulse) {
+    final left = widget.remaining.clamp(0, widget.total);
+    final color = widget.color;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        for (var i = 0; i < total; i++)
+        for (var i = 0; i < widget.total; i++)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 2),
             child: Container(
@@ -356,14 +494,14 @@ class TurnPips extends StatelessWidget {
               height: 8,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: i < remaining
-                    ? color.withValues(alpha: 0.25)
-                    : color.withValues(alpha: (danger ? pulse : 0.95).clamp(0.0, 1.0)),
+                color: i < left
+                    ? color.withValues(alpha: (widget.danger ? pulse : 0.95).clamp(0.0, 1.0))
+                    : color.withValues(alpha: 0.18),
                 border: Border.all(
-                  color: color.withValues(alpha: 0.7),
+                  color: color.withValues(alpha: i < left ? 0.7 : 0.35),
                   width: 1,
                 ),
-                boxShadow: i >= remaining
+                boxShadow: i < left
                     ? [
                         BoxShadow(
                           color: color.withValues(alpha: 0.7),
@@ -375,6 +513,20 @@ class TurnPips extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: '距离敌方行动 ${widget.remaining.clamp(0, widget.total)} 回合',
+      excludeSemantics: true,
+      child: widget.danger
+          ? AnimatedBuilder(
+              animation: _pulse,
+              builder: (context, _) => _row(0.6 + 0.4 * _pulse.value),
+            )
+          : _row(1.0),
     );
   }
 }

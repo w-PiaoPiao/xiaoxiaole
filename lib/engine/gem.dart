@@ -124,10 +124,22 @@ class SpecialActivation {
   /// 该强化宝石影响的格子范围。
   final List<int> area;
 
+  /// 这次引爆带来的额外伤害。
+  ///
+  /// 普通引爆按种类取值；两颗强化宝石换到一起时会给出远高于「两个单独引爆
+  /// 之和」的数字——玩家布好局的回报全在这里。
+  final int bonus;
+
+  /// 组合技的名字（普通引爆为 null）。UI 用它弹一条提示，
+  /// 告诉玩家"刚才那一下是个大家伙"。
+  final String? comboName;
+
   const SpecialActivation({
     required this.index,
     required this.kind,
     required this.type,
     required this.area,
+    this.bonus = 0,
+    this.comboName,
   });
 }

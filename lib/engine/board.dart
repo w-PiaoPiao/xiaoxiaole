@@ -436,23 +436,31 @@ class BoardEngine {
   List<CascadeStep> resolveSwap(int a, int b) {
     final steps = <CascadeStep>[];
 
-    // 强化宝石被直接交换时立即引爆。
+    // 强化宝石被直接交换时立即引爆。两颗强化宝石换到一起则触发**组合技**，
+    // 效果远大于各炸各的。
+    final merged = _swapCombo(a, b);
     final triggers = <SpecialActivation>[];
     final seed = <int>{};
-    for (final i in [a, b]) {
-      final gem = cells[i];
-      if (gem == null || !gem.isSpecial) continue;
-      final partner = i == a ? b : a;
-      final prismType = gem.special == SpecialKind.prism
-          ? (cells[partner]?.type ?? gem.type)
-          : null;
-      seed.add(i);
-      triggers.add(SpecialActivation(
-        index: i,
-        kind: gem.special,
-        type: gem.type,
-        area: _activationArea(i, gem.special, gem.type, prismType: prismType),
-      ));
+    if (merged != null) {
+      seed.addAll([a, b]);
+      triggers.add(merged);
+    } else {
+      for (final i in [a, b]) {
+        final gem = cells[i];
+        if (gem == null || !gem.isSpecial) continue;
+        final partner = i == a ? b : a;
+        final prismType = gem.special == SpecialKind.prism
+            ? (cells[partner]?.type ?? gem.type)
+            : null;
+        seed.add(i);
+        triggers.add(SpecialActivation(
+          index: i,
+          kind: gem.special,
+          type: gem.type,
+          area: _activationArea(i, gem.special, gem.type, prismType: prismType),
+          bonus: _bonusFor(gem.special),
+        ));
+      }
     }
 
     var combo = 1;
@@ -462,6 +470,10 @@ class BoardEngine {
         seedClear: seed,
         seedActivations: triggers,
         spawns: const [],
+        // 组合技已经把两颗宝石的意义一起算进范围了，**两颗都要抑制**：
+        // 它们都已经"用掉"了，谁也不能再按单颗效果炸一遍，否则就又变回
+        // "各炸各的"。（只抑制其中一颗时，另一颗会额外炸出自己的范围。）
+        suppress: merged != null ? {a, b} : const {},
       ));
       combo++;
     }
@@ -491,6 +503,148 @@ class BoardEngine {
       preferred = const {};
     }
     return steps;
+  }
+
+  // ------------------------------------------------------------ 强化宝石组合技
+
+  /// 两颗强化宝石换到一起时的合并效果。返回 null 表示不构成组合。
+  ///
+  /// 这是消消乐最"炸"的一刻：单颗引爆只清一条线，两颗叠在一起能清掉大半个
+  /// 棋盘。规则刻意做得符合直觉——
+  ///
+  /// | 组合 | 效果 |
+  /// | --- | --- |
+  /// | 破空 + 破空 | 十字（整行 + 整列） |
+  /// | 破空 + 爆裂 | 三行 + 三列的粗十字 |
+  /// | 爆裂 + 爆裂 | 5x5 |
+  /// | 棱镜 + 破空 | 全场同色，并清掉它们所在的每一行与每一列 |
+  /// | 棱镜 + 爆裂 | 全场同色 + 5x5 |
+  /// | 棱镜 + 棱镜 | 清空整个棋盘 |
+  SpecialActivation? _swapCombo(int a, int b) {
+    final ga = cells[a], gb = cells[b];
+    if (ga == null || gb == null) return null;
+    if (!ga.isSpecial || !gb.isSpecial) return null;
+
+    final isPrism = ga.special == SpecialKind.prism && gb.special == SpecialKind.prism;
+    if (isPrism) {
+      return SpecialActivation(
+        index: a,
+        kind: SpecialKind.prism,
+        type: ga.type,
+        area: [for (var i = 0; i < cells.length; i++) i],
+        bonus: 600,
+        comboName: '万象归一',
+      );
+    }
+
+    final prismGem = ga.special == SpecialKind.prism
+        ? ga
+        : (gb.special == SpecialKind.prism ? gb : null);
+    if (prismGem != null) {
+      final other = identical(prismGem, ga) ? gb : ga;
+      final prismIndex = identical(prismGem, ga) ? a : b;
+      final sameColor = _colorArea(prismGem.type);
+      final List<int> extra;
+      final String name;
+      final int bonus;
+      if (other.special == SpecialKind.lineH || other.special == SpecialKind.lineV) {
+        // 经典「同色风暴」：全场同色，加上它们铺开的每一行与每一列。
+        extra = _linesThrough(sameColor);
+        name = '同色风暴';
+        bonus = 400;
+      } else {
+        extra = _boxArea(prismIndex, 2);
+        name = '棱镜爆裂';
+        bonus = 320;
+      }
+      return SpecialActivation(
+        index: prismIndex,
+        kind: SpecialKind.prism,
+        type: prismGem.type,
+        area: {...sameColor, ...extra}.toList(),
+        bonus: bonus,
+        comboName: name,
+      );
+    }
+
+    final aLine = ga.special == SpecialKind.lineH || ga.special == SpecialKind.lineV;
+    final bLine = gb.special == SpecialKind.lineH || gb.special == SpecialKind.lineV;
+    if (aLine && bLine) {
+      return SpecialActivation(
+        index: a,
+        kind: ga.special,
+        type: ga.type,
+        area: _crossArea(a),
+        bonus: 120,
+        comboName: '十字破空',
+      );
+    }
+    if (aLine != bLine) {
+      return SpecialActivation(
+        index: a,
+        kind: ga.special,
+        type: ga.type,
+        area: _thickCrossArea(a),
+        bonus: 200,
+        comboName: '破空爆裂',
+      );
+    }
+    return SpecialActivation(
+      index: a,
+      kind: SpecialKind.burst,
+      type: ga.type,
+      area: _boxArea(a, 2),
+      bonus: 240,
+      comboName: '连环爆裂',
+    );
+  }
+
+  List<int> _colorArea(GemType type) => [
+        for (var i = 0; i < cells.length; i++)
+          if (cells[i]?.type == type) i,
+      ];
+
+  List<int> _crossArea(int index) => {
+        for (var x = 0; x < cols; x++) this.index(x, yOf(index)),
+        for (var y = 0; y < rows; y++) this.index(xOf(index), y),
+      }.toList();
+
+  /// 以 [index] 为中心的三行三列（去掉超出边界的部分）。
+  List<int> _thickCrossArea(int index) {
+    final cx = xOf(index), cy = yOf(index);
+    return {
+      for (var dy = -1; dy <= 1; dy++)
+        if (cy + dy >= 0 && cy + dy < rows)
+          for (var x = 0; x < cols; x++) this.index(x, cy + dy),
+      for (var dx = -1; dx <= 1; dx++)
+        if (cx + dx >= 0 && cx + dx < cols)
+          for (var y = 0; y < rows; y++) this.index(cx + dx, y),
+    }.toList();
+  }
+
+  /// 以 [index] 为中心、边长 `2*radius+1` 的方形区域。
+  List<int> _boxArea(int index, int radius) {
+    final cx = xOf(index), cy = yOf(index);
+    return [
+      for (var dy = -radius; dy <= radius; dy++)
+        for (var dx = -radius; dx <= radius; dx++)
+          if (inBounds(cx + dx, cy + dy)) this.index(cx + dx, cy + dy),
+    ];
+  }
+
+  /// 覆盖 [indices] 中每一个格子所在的整行与整列。
+  List<int> _linesThrough(Iterable<int> indices) {
+    final rows = <int>{};
+    final cols = <int>{};
+    for (final i in indices) {
+      rows.add(yOf(i));
+      cols.add(xOf(i));
+    }
+    return [
+      for (var y = 0; y < BoardEngine.rows; y++)
+        for (var x = 0; x < BoardEngine.cols; x++)
+          if (rows.contains(y) || cols.contains(x)) index(x, y),
+    ];
   }
 
   /// 在每组里挑出更贴近玩家落点的位置放置强化宝石。
@@ -548,6 +702,7 @@ class BoardEngine {
     required List<SpecialActivation> seedActivations,
     required List<SpecialSpawn> spawns,
     Map<int, int> preferredAnchors = const {},
+    Set<int> suppress = const {},
   }) {
     final toClear = <int>{...seedClear};
     // 交换直接触发的强化宝石：其影响范围要一并纳入清除。
@@ -555,7 +710,7 @@ class BoardEngine {
       toClear.addAll(activation.area);
     }
     final activations = <SpecialActivation>[...seedActivations];
-    final activated = <int>{for (final a in seedActivations) a.index};
+    final activated = <int>{for (final a in seedActivations) a.index, ...suppress};
     final queued = <int>{...activated};
     final queue = <int>[];
 
@@ -579,6 +734,7 @@ class BoardEngine {
         kind: gem.special,
         type: gem.type,
         area: area,
+        bonus: _bonusFor(gem.special),
       ));
       for (final j in area) {
         if (j == i) continue;
@@ -634,7 +790,7 @@ class BoardEngine {
       activations: activations,
       snapshot: snapshot(),
       spawnStartY: spawnStartY,
-      specialBonus: activations.fold(0, (sum, a) => sum + _bonusFor(a.kind)),
+      specialBonus: activations.fold(0, (sum, a) => sum + a.bonus),
     );
   }
 
