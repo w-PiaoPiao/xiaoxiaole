@@ -50,7 +50,10 @@ class HelpPanel extends StatelessWidget {
                       color: Palette.textDim,
                       padding: EdgeInsets.zero,
                       visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+                      constraints: const BoxConstraints.tightFor(
+                        width: 34,
+                        height: 34,
+                      ),
                       style: IconButton.styleFrom(
                         backgroundColor: Palette.panel.withValues(alpha: 0.9),
                         side: const BorderSide(color: Palette.panelEdge),
@@ -125,6 +128,10 @@ class HelpPanel extends StatelessWidget {
         '整行带整列一起清掉。落点选得好不好，差别很大。',
     '每打赢一关可以从三张强化里挑一张，它会一直带到最后一关。暴击、连锁上限、生命上限这些'
         '都只从强化里来——想打得爽就得先攒 build。',
+    '每关开局道具栏补足成三件：锤子（点掉任意一格，机关连壳砸碎）、洗牌（重排棋盘）、'
+        '凝滞（敌方出手推迟一回合）。道具不消耗回合；危机关头（下一击挡不住）道具栏会亮起来。',
+    '被机关锁住的宝石不能交换、也不参与匹配，用相邻消除或锤子把机关破掉。冰封纯粹占格；'
+        '毒藤每株让敌人攻击 +5%；祭坛破除时立刻给你 20 点怒气。机关跟着宝石一起下落。',
     '注意敌方行动回合，及时用护盾与治疗抵挡；血量低于狂暴线的敌人会变强。迷雾鬼火命中还会夺走怒气。',
     '无尽模式里敌人每波都更强，从第 4 波起还会带上精英词条（护盾再生、吸血、禁疗、狂暴、汲魂）。'
         '卡住时可以点状态条上的灯泡按钮，让系统推荐一步。',
@@ -149,5 +156,6 @@ class _MiniGemPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _MiniGemPainter oldDelegate) => oldDelegate.type != type;
+  bool shouldRepaint(covariant _MiniGemPainter oldDelegate) =>
+      oldDelegate.type != type;
 }

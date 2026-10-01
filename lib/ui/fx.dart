@@ -13,6 +13,9 @@ class GemVisual {
   GemType type;
   SpecialKind special;
 
+  /// 附着在这颗宝石上的机关（视觉层据此把冰壳 / 藤蔓 / 祭坛画在宝石上）。
+  ObstacleKind? obstacle;
+
   double x;
   double y;
 
@@ -39,6 +42,7 @@ class GemVisual {
     required this.id,
     required this.type,
     required this.special,
+    this.obstacle,
     required this.x,
     required this.y,
     required this.toX,
@@ -239,11 +243,20 @@ class FxController extends ChangeNotifier {
   /// 棋盘重绘信号：棋盘的 painter 监听它，而不是 [FxController] 本身。
   final RepaintSignal boardRepaint = RepaintSignal();
 
+  /// 战斗区的重绘信号。
+  ///
+  /// 正常模式下浮尘一直在飘、敌人的剪影也在摆动，战斗区本来就该逐帧重绘；
+  /// 但开了「减少动态效果」之后这两样都是静止的，这时只有真的发生动画
+  /// （飘字、打击、白闪、消散）才需要重画——屏幕上大半时间没有动静，
+  /// 能省下整块战斗区的逐帧绘制。
+  final RepaintSignal battleRepaint = RepaintSignal();
+
   /// 由 BoardView 每帧告知：棋盘上是否有依赖时间的持续脉冲（选中的呼吸、
   /// 落子提示的闪烁）。有的话棋盘每帧都要重绘。
   bool boardPulse = false;
 
   bool _boardDirty = true;
+  bool _battleDirty = true;
 
   final Map<int, GemVisual> gems = {};
   final List<DyingGem> dying = [];
@@ -311,9 +324,12 @@ class FxController extends ChangeNotifier {
   Future<void> settle({Duration timeout = const Duration(seconds: 3)}) async {
     if (_allSettled) return;
     final completer = _settle ??= Completer<void>();
-    await completer.future.timeout(timeout, onTimeout: () {
-      if (identical(_settle, completer)) _settle = null;
-    });
+    await completer.future.timeout(
+      timeout,
+      onTimeout: () {
+        if (identical(_settle, completer)) _settle = null;
+      },
+    );
   }
 
   // ------------------------------------------------------------------ 每帧推进
@@ -340,7 +356,9 @@ class FxController extends ChangeNotifier {
       }
       gem.glow = math.max(0, gem.glow - dt * 2.4);
       gem.flash = math.max(0, gem.flash - dt * 3.6);
-      gem.spin += dt * 1.6;
+      // 棱镜的彩色环一直在转；开了「减少动态效果」就让它停下来，
+      // 棋盘随之下面的 _computeBoardDirty 一起回到"静止不重绘"。
+      if (!reducedMotion) gem.spin += dt * 1.6;
     }
 
     for (final d in dying) {
@@ -406,19 +424,46 @@ class FxController extends ChangeNotifier {
     if (dirty || _boardDirty) boardRepaint.ping();
     _boardDirty = dirty;
 
+    final battleDirty = _computeBattleDirty();
+    if (battleDirty || _battleDirty) battleRepaint.ping();
+    _battleDirty = battleDirty;
+
     notifyListeners();
+  }
+
+  /// 战斗区是否需要重绘。
+  ///
+  /// 正常模式直接返回 true：浮尘与敌人剪影都是持续动画，逐帧重绘是必要的。
+  /// 「减少动态效果」把它们停下来之后，才只剩这些真正的动画事件。
+  bool _computeBattleDirty() {
+    if (!reducedMotion) return true;
+    return floats.isNotEmpty ||
+        strikes.isNotEmpty ||
+        ultimate != null ||
+        enemyFlash > 0.01 ||
+        enemyLunge > 0.01 ||
+        enemyRecoil > 0.01 ||
+        playerFlash > 0.01 ||
+        dissolve > 0.01 ||
+        dissolveTarget > 0.01;
   }
 
   /// 棋盘上是否还有正在变化的东西。
   bool _computeBoardDirty() {
     if (boardPulse) return true;
-    if (dying.isNotEmpty || particles.isNotEmpty || rings.isNotEmpty || labels.isNotEmpty) {
+    if (dying.isNotEmpty ||
+        particles.isNotEmpty ||
+        rings.isNotEmpty ||
+        labels.isNotEmpty) {
       return true;
     }
     for (final gem in gems.values) {
-      if (gem.moving || gem.birth < 1 || gem.glow > 0.01 || gem.flash > 0.01) return true;
-      // 棱镜的彩色环一直在转
-      if (gem.special == SpecialKind.prism) return true;
+      if (gem.moving || gem.birth < 1 || gem.glow > 0.01 || gem.flash > 0.01) {
+        return true;
+      }
+      // 棱镜的彩色环一直在转，所以棋盘每帧都得重画——除非玩家开了
+      // 「减少动态效果」，那时环是静止的（见 tick），棋盘也就安静了。
+      if (gem.special == SpecialKind.prism && !reducedMotion) return true;
     }
     return false;
   }
@@ -462,6 +507,7 @@ class FxController extends ChangeNotifier {
           id: cell.gemId,
           type: cell.type,
           special: cell.special,
+          obstacle: cell.obstacle,
           x: gx,
           y: fromY,
           fromX: gx,
@@ -478,6 +524,7 @@ class FxController extends ChangeNotifier {
       } else {
         existing.type = cell.type;
         existing.special = cell.special;
+        existing.obstacle = cell.obstacle;
         if ((existing.toX - gx).abs() > 0.001 ||
             (existing.toY - gy).abs() > 0.001) {
           final distance = (existing.y - gy).abs();
@@ -486,8 +533,10 @@ class FxController extends ChangeNotifier {
           existing.toX = gx;
           existing.toY = gy;
           existing.t = 0;
-          existing.duration =
-              (fallDuration * (0.45 + distance * 0.16)).clamp(0.14, 0.55);
+          existing.duration = (fallDuration * (0.45 + distance * 0.16)).clamp(
+            0.14,
+            0.55,
+          );
         }
       }
     }
@@ -512,40 +561,84 @@ class FxController extends ChangeNotifier {
       final visual = gems[c.gemId];
       final gx = visual?.x ?? (c.index % BoardEngine.cols).toDouble();
       final gy = visual?.y ?? (c.index ~/ BoardEngine.cols).toDouble();
-      dying.add(DyingGem(
-        x: gx,
-        y: gy,
-        type: c.type,
-        special: c.special,
-      ));
+      dying.add(DyingGem(x: gx, y: gy, type: c.type, special: c.special));
       gems.remove(c.gemId);
       _burstAt(gx, gy, c.type, c.special, budget: perGem);
     }
   }
 
-  void _burstAt(double gx, double gy, GemType type, SpecialKind special, {int budget = 7}) {
+  /// 机关被破除时的碎裂反馈：一圈同色涟漪 + 少量碎屑。
+  ///
+  /// 机关对应的颜色取自 Palette 里已经存在的语义色（冰=护盾蓝、
+  /// 藤=生命绿、祭坛=金色），不再引入一套新的色板。
+  void crackObstacle(int index, ObstacleKind kind) {
+    final gx = (index % BoardEngine.cols).toDouble();
+    final gy = (index ~/ BoardEngine.cols).toDouble();
+    final color = switch (kind) {
+      ObstacleKind.frost => Palette.shield,
+      ObstacleKind.vine => Palette.hpPlayer,
+      ObstacleKind.altar => Palette.gold,
+    };
+    final budget = reducedMotion ? 2 : 5;
+    for (var i = 0; i < budget; i++) {
+      final angle = _rng.nextDouble() * math.pi * 2;
+      final speed = 1.0 + _rng.nextDouble() * 2.2;
+      particles.add(
+        Particle(
+          x: gx + 0.5,
+          y: gy + 0.5,
+          vx: math.cos(angle) * speed,
+          vy: math.sin(angle) * speed - 0.9,
+          color: i.isEven ? color : Colors.white,
+          size: 0.04 + _rng.nextDouble() * 0.05,
+          maxLife: 0.30 + _rng.nextDouble() * 0.25,
+        ),
+      );
+    }
+    rings.add(
+      Ring(
+        x: gx + 0.5,
+        y: gy + 0.5,
+        color: color,
+        maxRadius: 1.1,
+        duration: 0.34,
+      ),
+    );
+  }
+
+  void _burstAt(
+    double gx,
+    double gy,
+    GemType type,
+    SpecialKind special, {
+    int budget = 7,
+  }) {
     final color = Palette.gem(type);
     final count = special == SpecialKind.none ? budget : budget * 2;
     for (var i = 0; i < count; i++) {
       final angle = _rng.nextDouble() * math.pi * 2;
       final speed = 1.4 + _rng.nextDouble() * 3.0;
-      particles.add(Particle(
+      particles.add(
+        Particle(
+          x: gx + 0.5,
+          y: gy + 0.5,
+          vx: math.cos(angle) * speed,
+          vy: math.sin(angle) * speed - 1.2,
+          color: i.isEven ? color : Colors.white,
+          size: 0.05 + _rng.nextDouble() * 0.07,
+          maxLife: 0.35 + _rng.nextDouble() * 0.35,
+        ),
+      );
+    }
+    rings.add(
+      Ring(
         x: gx + 0.5,
         y: gy + 0.5,
-        vx: math.cos(angle) * speed,
-        vy: math.sin(angle) * speed - 1.2,
-        color: i.isEven ? color : Colors.white,
-        size: 0.05 + _rng.nextDouble() * 0.07,
-        maxLife: 0.35 + _rng.nextDouble() * 0.35,
-      ));
-    }
-    rings.add(Ring(
-      x: gx + 0.5,
-      y: gy + 0.5,
-      color: color,
-      maxRadius: special == SpecialKind.none ? 1.0 : 2.6,
-      duration: special == SpecialKind.none ? 0.34 : 0.55,
-    ));
+        color: color,
+        maxRadius: special == SpecialKind.none ? 1.0 : 2.6,
+        duration: special == SpecialKind.none ? 0.34 : 0.55,
+      ),
+    );
   }
 
   /// 强化宝石引爆时的额外表现。
@@ -553,35 +646,45 @@ class FxController extends ChangeNotifier {
     final gx = (activation.index % BoardEngine.cols).toDouble();
     final gy = (activation.index ~/ BoardEngine.cols).toDouble();
     final color = Palette.gem(activation.type);
-    rings.add(Ring(
-      x: gx + 0.5,
-      y: gy + 0.5,
-      color: Colors.white,
-      // 冲击波的大小跟着实际清除范围走：单颗破空是 8 格、组合技的十字是
-      // 15 格、同色风暴能到 50 格以上，用同一个半径就分不出轻重了。
-      maxRadius: activation.kind == SpecialKind.prism
-          ? 7.0
-          : (2.0 + activation.area.length * 0.16).clamp(2.6, 6.5),
-      width: 0.26,
-      duration: 0.5,
-    ));
+    rings.add(
+      Ring(
+        x: gx + 0.5,
+        y: gy + 0.5,
+        color: Colors.white,
+        // 冲击波的大小跟着实际清除范围走：单颗破空是 8 格、组合技的十字是
+        // 15 格、同色风暴能到 50 格以上，用同一个半径就分不出轻重了。
+        maxRadius: activation.kind == SpecialKind.prism
+            ? 7.0
+            : (2.0 + activation.area.length * 0.16).clamp(2.6, 6.5),
+        width: 0.26,
+        duration: 0.5,
+      ),
+    );
     for (final index in activation.area) {
       if (index == activation.index) continue;
       final x = (index % BoardEngine.cols).toDouble() + 0.5;
       final y = (index ~/ BoardEngine.cols).toDouble() + 0.5;
-      particles.add(Particle(
-        x: x,
-        y: y,
-        vx: (_rng.nextDouble() - 0.5) * 2,
-        vy: -1 - _rng.nextDouble() * 2,
-        color: color,
-        size: 0.06,
-        maxLife: 0.4,
-      ));
+      particles.add(
+        Particle(
+          x: x,
+          y: y,
+          vx: (_rng.nextDouble() - 0.5) * 2,
+          vy: -1 - _rng.nextDouble() * 2,
+          color: color,
+          size: 0.06,
+          maxLife: 0.4,
+        ),
+      );
     }
   }
 
-  void addLabel(String text, double gx, double gy, Color color, {double size = 34}) {
+  void addLabel(
+    String text,
+    double gx,
+    double gy,
+    Color color, {
+    double size = 34,
+  }) {
     labels.add(BoardLabel(text: text, x: gx, y: gy, color: color, size: size));
   }
 
@@ -594,33 +697,48 @@ class FxController extends ChangeNotifier {
     enemyLunge = 1;
   }
 
-  void addFloat(String text, Color color, {double nx = 0.5, double ny = 0.4, double size = 26}) {
-    floats.add(FloatText(
-      text: text,
-      color: color,
-      nx: nx + (_rng.nextDouble() - 0.5) * 0.10,
-      ny: ny + (_rng.nextDouble() - 0.5) * 0.05,
-      size: size,
-    ));
+  void addFloat(
+    String text,
+    Color color, {
+    double nx = 0.5,
+    double ny = 0.4,
+    double size = 26,
+  }) {
+    floats.add(
+      FloatText(
+        text: text,
+        color: color,
+        nx: nx + (_rng.nextDouble() - 0.5) * 0.10,
+        ny: ny + (_rng.nextDouble() - 0.5) * 0.05,
+        size: size,
+      ),
+    );
   }
 
   /// 打出一次打击特效。[count] 是这次消除的宝石数量，决定力度。
-  void addStrike(StrikeKind kind, {int count = 3, double nx = 0.5, double ny = 0.52}) {
-    strikes.add(StrikeFx(
-      kind: kind,
-      seed: _rng.nextInt(1 << 20),
-      nx: nx + (_rng.nextDouble() - 0.5) * 0.06,
-      ny: ny + (_rng.nextDouble() - 0.5) * 0.04,
-      power: (0.72 + count * 0.085).clamp(0.72, 1.7),
-      duration: switch (kind) {
-        StrikeKind.lightning => 0.34,
-        StrikeKind.sword => 0.46,
-        StrikeKind.curse => 0.62,
-        StrikeKind.heal => 0.7,
-        StrikeKind.shield => 0.6,
-        StrikeKind.enemyHit => 0.5,
-      },
-    ));
+  void addStrike(
+    StrikeKind kind, {
+    int count = 3,
+    double nx = 0.5,
+    double ny = 0.52,
+  }) {
+    strikes.add(
+      StrikeFx(
+        kind: kind,
+        seed: _rng.nextInt(1 << 20),
+        nx: nx + (_rng.nextDouble() - 0.5) * 0.06,
+        ny: ny + (_rng.nextDouble() - 0.5) * 0.04,
+        power: (0.72 + count * 0.085).clamp(0.72, 1.7),
+        duration: switch (kind) {
+          StrikeKind.lightning => 0.34,
+          StrikeKind.sword => 0.46,
+          StrikeKind.curse => 0.62,
+          StrikeKind.heal => 0.7,
+          StrikeKind.shield => 0.6,
+          StrikeKind.enemyHit => 0.5,
+        },
+      ),
+    );
   }
 
   /// 命中：白闪 + 后仰 + 定格。[damage] 越大打得越重。

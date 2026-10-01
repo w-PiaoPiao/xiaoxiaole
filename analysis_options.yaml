@@ -26,8 +26,22 @@ linter:
   # `// ignore_for_file: name_of_lint` syntax on the line or in the file
   # producing the lint.
   rules:
-    # avoid_print: false  # Uncomment to disable the `avoid_print` rule
-    # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
+    # 漏掉 await 的 Future 会让异常静默消失（例如写盘失败、平台通道报错），
+    # 显式 unawaited 能把"有意放手"的地方和真正的漏 await 区分开。
+    unawaited_futures: true
+    discarded_futures: true
+    # 常量构造能省下每帧重建时的分配：绘制与卡片大量在 build 里创建样式
+    # 对象，const 化的收益直接体现在滚动与动画的帧时间上。
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    prefer_const_literals_to_create_immutables: true
+    # 不必要的容器会多一层布局与绘制，也容易掩盖真正的结构问题。
+    avoid_unnecessary_containers: true
+    sized_box_for_whitespace: true
+    # 不可变 widget 的字段应当是 final，避免状态被意外改写。
+    prefer_final_fields: true
+    unnecessary_lambdas: true
+    use_super_parameters: true
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

@@ -43,87 +43,93 @@ typedef _Voice = double Function(double t, double dur, math.Random rng);
 
 /// 消除：清脆的水晶音。连击越高音阶越高。
 _Voice _clearVoice(double base) => (t, dur, rng) {
-      final e = _env(t, dur, attack: 0.002, decay: 7.0);
-      final shimmer = 0.25 * _tone(t, base * 2, harmonics: 0.1) * _env(t, dur, decay: 14);
-      return e * (0.8 * _tone(t, base, harmonics: 0.5) + shimmer);
-    };
+  final e = _env(t, dur, attack: 0.002, decay: 7.0);
+  final shimmer =
+      0.25 * _tone(t, base * 2, harmonics: 0.1) * _env(t, dur, decay: 14);
+  return e * (0.8 * _tone(t, base, harmonics: 0.5) + shimmer);
+};
 
 /// 强化宝石：生成时上扬、引爆时下坠。
 _Voice _specialVoice({required bool rising}) => (t, dur, rng) {
-      final f = rising ? _sweep(t, dur, 420, 1500) : _sweep(t, dur, 1500, 380);
-      final e = _env(t, dur, attack: 0.006, decay: 4.5);
-      final crack = 0.35 * _noise(rng) * _env(t, dur, attack: 0.001, decay: 22);
-      return e * _tone(t, f, harmonics: 0.7) + crack;
-    };
+  final f = rising ? _sweep(t, dur, 420, 1500) : _sweep(t, dur, 1500, 380);
+  final e = _env(t, dur, attack: 0.006, decay: 4.5);
+  final crack = 0.35 * _noise(rng) * _env(t, dur, attack: 0.001, decay: 22);
+  return e * _tone(t, f, harmonics: 0.7) + crack;
+};
 
 /// 命中：一记闷响，低频冲击 + 噪声爆。
 _Voice get _hit => (t, dur, rng) {
-      final e = _env(t, dur, attack: 0.001, decay: 9.0);
-      final thump = _tone(t, _sweep(t, dur, 180, 60), harmonics: 0.25);
-      final crack = 0.55 * _noise(rng) * _env(t, dur, attack: 0.0005, decay: 16);
-      return e * thump * 1.1 + crack;
-    };
+  final e = _env(t, dur, attack: 0.001, decay: 9.0);
+  final thump = _tone(t, _sweep(t, dur, 180, 60), harmonics: 0.25);
+  final crack = 0.55 * _noise(rng) * _env(t, dur, attack: 0.0005, decay: 16);
+  return e * thump * 1.1 + crack;
+};
 
 /// 玩家受击：低沉的下行，带一点不祥的余韵。
 _Voice get _hurt => (t, dur, rng) {
-      final e = _env(t, dur, attack: 0.004, decay: 3.4);
-      final body = _tone(t, _sweep(t, dur, 220, 72), harmonics: 0.4);
-      final grit = 0.3 * _noise(rng) * _env(t, dur, attack: 0.002, decay: 8);
-      return e * body + grit;
-    };
+  final e = _env(t, dur, attack: 0.004, decay: 3.4);
+  final body = _tone(t, _sweep(t, dur, 220, 72), harmonics: 0.4);
+  final grit = 0.3 * _noise(rng) * _env(t, dur, attack: 0.002, decay: 8);
+  return e * body + grit;
+};
 
 /// 必杀「斩月」：拔刀般的上扬横扫 + 长长的月华余韵。
 _Voice get _ultimate => (t, dur, rng) {
-      final swing = _tone(t, _sweep(t, dur, 260, 1900), harmonics: 0.8) *
-          _env(t, dur, attack: 0.02, decay: 3.0);
-      final tail = 0.5 *
-          _tone(t, _sweep(t, dur, 1900, 900), harmonics: 0.2) *
-          _env(t, dur, attack: 0.08, decay: 1.6);
-      final clash = 0.4 * _noise(rng) * _env(t, dur, attack: 0.001, decay: 26);
-      return swing + tail + clash;
-    };
+  final swing =
+      _tone(t, _sweep(t, dur, 260, 1900), harmonics: 0.8) *
+      _env(t, dur, attack: 0.02, decay: 3.0);
+  final tail =
+      0.5 *
+      _tone(t, _sweep(t, dur, 1900, 900), harmonics: 0.2) *
+      _env(t, dur, attack: 0.08, decay: 1.6);
+  final clash = 0.4 * _noise(rng) * _env(t, dur, attack: 0.001, decay: 26);
+  return swing + tail + clash;
+};
 
 /// 暴击：金属撞击的"当啷"。高频泛音 + 极短的噪声爆，
 /// 比普通命中的闷响亮得多——一耳朵就能听出"这一下不一样"。
 _Voice get _crit => (t, dur, rng) {
-      final e = _env(t, dur, attack: 0.0008, decay: 9.0);
-      final strike = _tone(t, _sweep(t, dur, 2400, 1500), harmonics: 1.0);
-      final ring = 0.6 *
-          _tone(t, 1760, harmonics: 0.6) *
-          _env(t, dur, attack: 0.002, decay: 4.0);
-      final grit = 0.5 * _noise(rng) * _env(t, dur, attack: 0.0004, decay: 30);
-      return e * strike + ring + grit;
-    };
+  final e = _env(t, dur, attack: 0.0008, decay: 9.0);
+  final strike = _tone(t, _sweep(t, dur, 2400, 1500), harmonics: 1.0);
+  final ring =
+      0.6 *
+      _tone(t, 1760, harmonics: 0.6) *
+      _env(t, dur, attack: 0.002, decay: 4.0);
+  final grit = 0.5 * _noise(rng) * _env(t, dur, attack: 0.0004, decay: 30);
+  return e * strike + ring + grit;
+};
 
 /// 胜利：上行的琶音。
 _Voice get _win => (t, dur, rng) {
-      const notes = [523.25, 659.25, 783.99, 1046.5];
-      const step = 0.13;
-      var v = 0.0;
-      for (var i = 0; i < notes.length; i++) {
-        final start = i * step;
-        if (t >= start) {
-          v += _tone(t - start, notes[i], harmonics: 0.4) *
-              _env(t - start, dur - start, attack: 0.005, decay: 5.0);
-        }
-      }
-      return v * 0.5;
-    };
+  const notes = [523.25, 659.25, 783.99, 1046.5];
+  const step = 0.13;
+  var v = 0.0;
+  for (var i = 0; i < notes.length; i++) {
+    final start = i * step;
+    if (t >= start) {
+      v +=
+          _tone(t - start, notes[i], harmonics: 0.4) *
+          _env(t - start, dur - start, attack: 0.005, decay: 5.0);
+    }
+  }
+  return v * 0.5;
+};
 
 /// 失败：下行的长音，收在低音上。
 _Voice get _lose => (t, dur, rng) {
-      const notes = [392.0, 311.13, 261.63];
-      const step = 0.16;
-      var v = 0.0;
-      for (var i = 0; i < notes.length; i++) {
-        final start = i * step;
-        if (t >= start) {
-          v += _tone(t - start, notes[i], harmonics: 0.25) *
-              _env(t - start, dur - start, attack: 0.01, decay: 3.2);
-        }
-      }
-      return v * 0.5;
-    };
+  const notes = [392.0, 311.13, 261.63];
+  const step = 0.16;
+  var v = 0.0;
+  for (var i = 0; i < notes.length; i++) {
+    final start = i * step;
+    if (t >= start) {
+      v +=
+          _tone(t - start, notes[i], harmonics: 0.25) *
+          _env(t - start, dur - start, attack: 0.01, decay: 3.2);
+    }
+  }
+  return v * 0.5;
+};
 
 // ------------------------------------------------------------------ 输出
 
@@ -167,13 +173,18 @@ Uint8List _encodeWav(List<double> samples, int sampleRate) {
 void _write(String name, double seconds, _Voice voice, {int seed = 7}) {
   final count = (seconds * _sampleRate).round();
   final rng = math.Random(seed);
-  final samples = List<double>.generate(count, (i) => voice(i / _sampleRate, seconds, rng));
+  final samples = List<double>.generate(
+    count,
+    (i) => voice(i / _sampleRate, seconds, rng),
+  );
   final bytes = _encodeWav(samples, _sampleRate);
   final file = File('assets/sfx/$name.wav');
   file.parent.createSync(recursive: true);
   file.writeAsBytesSync(bytes);
   // ignore: avoid_print
-  print('已生成 assets/sfx/$name.wav  ${(bytes.length / 1024).toStringAsFixed(1)} KB');
+  print(
+    '已生成 assets/sfx/$name.wav  ${(bytes.length / 1024).toStringAsFixed(1)} KB',
+  );
 }
 
 void main() {

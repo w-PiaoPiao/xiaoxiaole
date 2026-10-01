@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:audioplayers/audioplayers.dart';
@@ -25,21 +26,32 @@ class SfxController {
   static const _poolSize = 3;
 
   static const List<String> _sources = [
-    'clear1', 'clear2', 'clear3', 'special', 'burst',
-    'hit', 'crit', 'hurt', 'ultimate', 'win', 'lose',
+    'clear1',
+    'clear2',
+    'clear3',
+    'special',
+    'burst',
+    'hit',
+    'crit',
+    'hurt',
+    'ultimate',
+    'win',
+    'lose',
   ];
 
   /// 预加载全部音效。在 `main()` 里 await，之后 [play] 才是即时的。
   Future<void> load() async {
     if (!_audioAllowed) return;
     // 全部播放器并行创建：串行 await 三十次会让启动明显卡一下。
-    await Future.wait(_sources.map((name) async {
-      final players = await Future.wait(
-        List.generate(_poolSize, (_) => _createPlayer(name)),
-      );
-      _pools[name] = players;
-      _cursor[name] = 0;
-    }));
+    await Future.wait(
+      _sources.map((name) async {
+        final players = await Future.wait(
+          List.generate(_poolSize, (_) => _createPlayer(name)),
+        );
+        _pools[name] = players;
+        _cursor[name] = 0;
+      }),
+    );
     _ready = true;
   }
 
@@ -76,21 +88,21 @@ class SfxController {
     final index = (_cursor[name] ?? 0) % players.length;
     _cursor[name] = index + 1;
     final player = players[index];
-    // 不 await：音频调用绝不能阻塞游戏循环。
-    () async {
+    // 不 await：音频调用绝不能阻塞游戏循环（失败已在内部吞掉）。
+    unawaited(() async {
       try {
         await player.stop();
         await player.setVolume(volume);
         await player.resume();
       } catch (_) {}
-    }();
+    }());
   }
 
   // ---------------------------------------------------------------- 触感
 
   void _haptic(Future<void> Function() action) {
     if (!hapticsEnabled) return;
-    action().catchError((_) {});
+    unawaited(action().catchError((_) {}));
   }
 
   /// 轻点：选中宝石、切换选项。

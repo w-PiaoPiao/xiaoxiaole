@@ -8,8 +8,7 @@ import 'package:gem_battle/engine/levels.dart';
 import 'package:gem_battle/engine/roguelike.dart';
 import 'package:gem_battle/engine/upgrades.dart';
 
-/// 造一份只包含指定强化的档案，层数由传入的次数决定。
-PlayerProfile profileWith(Map<String, int> taken) => UpgradePool.profileFor(taken);
+import 'support/helpers.dart';
 
 void main() {
   group('强化系统', () {
@@ -59,8 +58,11 @@ void main() {
           rng: math.Random(seed),
         );
         expect(offered.any((u) => u.id == 'critDamage'), isFalse);
-        expect(offered.map((u) => u.id).toSet().length, offered.length,
-            reason: '同一次抽取不该出现重复的牌');
+        expect(
+          offered.map((u) => u.id).toSet().length,
+          offered.length,
+          reason: '同一次抽取不该出现重复的牌',
+        );
       }
     });
 
@@ -103,9 +105,10 @@ void main() {
     test('每条强化的数值都真的落到了档案上', () {
       // 逐条验证 apply 有实际效果：写错字段（比如加了却不生效）会在这里被抓住。
       for (final upgrade in UpgradePool.all) {
-        final before = Campaign.player;
+        const before = Campaign.player;
         final after = upgrade.apply(before);
-        final changed = before.redDamage != after.redDamage ||
+        final changed =
+            before.redDamage != after.redDamage ||
             before.blueShield != after.blueShield ||
             before.greenHeal != after.greenHeal ||
             before.yellowRage != after.yellowRage ||
@@ -150,12 +153,12 @@ void main() {
     final def = Campaign.levels[0].enemy;
 
     BattleState battleWith(Map<String, int> taken, {int? hp}) => BattleState(
-          def: def,
-          levelIndex: 0,
-          profile: profileWith(taken),
-          playerHp: hp,
-          rng: math.Random(1),
-        );
+      def: def,
+      levelIndex: 0,
+      profile: profileWith(taken),
+      playerHp: hp,
+      rng: math.Random(1),
+    );
 
     test('烈焰精通提高红宝石伤害', () {
       final state = battleWith(const {'blade': 2});
@@ -170,7 +173,8 @@ void main() {
       final events = state.applyClear({GemType.red: 3}, combo: 1);
       expect(events.any((e) => e.kind == CombatEventKind.crit), isTrue);
       final expected =
-          (3 * Campaign.player.redDamage * state.profile.critMultiplier).round();
+          (3 * Campaign.player.redDamage * state.profile.critMultiplier)
+              .round();
       expect(def.maxHp - state.enemyHp, expected);
     });
 
@@ -196,11 +200,14 @@ void main() {
     });
 
     test('深咒提高每层易伤的价值', () {
-      final state = battleWith(const {'curse': 3}); // 0.12 + 0.12 = 0.24
+      final state = battleWith(const {'curse': 3});
       state.applyClear({GemType.purple: 2}, combo: 1);
       final before = state.enemyHp;
       state.applyClear({GemType.red: 3}, combo: 1);
-      final expected = (3 * Campaign.player.redDamage * 1.48).round();
+      // 两层易伤，每层按档案里的 curseBonus 加成。
+      final expected =
+          (3 * Campaign.player.redDamage * (1 + state.profile.curseBonus * 2))
+              .round();
       expect(before - state.enemyHp, expected);
     });
 
@@ -238,10 +245,12 @@ void main() {
       healthy.applyClear({GemType.red: 3}, combo: 1);
       expect(def.maxHp - healthy.enemyHp, 3 * Campaign.player.redDamage);
 
-      final low = battleWith(const {'desperate': 1}, hp: 60); // 300 的 20%
+      final low = battleWith(const {'desperate': 1}, hp: 60); // 300 的 20%，低于逆境线
       expect(low.desperate, isTrue);
       low.applyClear({GemType.red: 3}, combo: 1);
-      final expected = (3 * Campaign.player.redDamage * 1.30).round();
+      final expected =
+          (3 * Campaign.player.redDamage * (1 + low.profile.desperateBonus))
+              .round();
       expect(def.maxHp - low.enemyHp, expected);
     });
 
@@ -262,20 +271,6 @@ void main() {
     const a = 27;
     const b = 28;
 
-    /// 造一块底色为黄（不会和红色凑出三连）的棋盘，[overlay] 覆盖指定格子。
-    /// 规格是「类型字母 + 强化标记」，例如 `Rp` = 红色棱镜、`Y.` = 普通黄。
-    BoardEngine boardOf(Map<int, String> overlay) {
-      final layout = <String>[];
-      for (var y = 0; y < BoardEngine.rows; y++) {
-        final line = StringBuffer();
-        for (var x = 0; x < BoardEngine.cols; x++) {
-          line.write(overlay[y * BoardEngine.cols + x] ?? 'Y.');
-        }
-        layout.add(line.toString());
-      }
-      return BoardEngine.fromLayout(layout, seed: 7);
-    }
-
     /// 交换 [a]、[b] 并结算，返回第一步。
     CascadeStep swapAndResolve(BoardEngine board) {
       board.swapCells(a, b);
@@ -284,18 +279,28 @@ void main() {
       return steps.first;
     }
 
-    Set<int> rowsOf(Iterable<int> indices) =>
-        {for (final i in indices) i ~/ BoardEngine.cols};
-    Set<int> colsOf(Iterable<int> indices) => {for (final i in indices) i % BoardEngine.cols};
+    Set<int> rowsOf(Iterable<int> indices) => {
+      for (final i in indices) i ~/ BoardEngine.cols,
+    };
+    Set<int> colsOf(Iterable<int> indices) => {
+      for (final i in indices) i % BoardEngine.cols,
+    };
 
     test('破空 + 破空 = 十字，清掉整行与整列', () {
       final step = swapAndResolve(boardOf({a: 'Rh', b: 'Rv'}));
       // 十字 = 第 3 行（8 格）+ 第 4 列（8 格）− 交叉点重复的 1 格。
       expect(step.cleared.length, 15);
-      expect({for (final c in step.cleared) c.index}.contains(a), isTrue, reason: '十字中心');
+      expect(
+        {for (final c in step.cleared) c.index}.contains(a),
+        isTrue,
+        reason: '十字中心',
+      );
       expect(step.activations.single.comboName, '十字破空');
-      expect(step.activations.single.bonus, greaterThan(80),
-          reason: '组合技的额外伤害要高于单颗爆裂（80）');
+      expect(
+        step.activations.single.bonus,
+        greaterThan(80),
+        reason: '组合技的额外伤害要高于单颗爆裂（80）',
+      );
     });
 
     test('爆裂 + 爆裂 = 以落点为中心的 5x5', () {
@@ -304,7 +309,10 @@ void main() {
       expect(index.length, 25);
       // 27 = (3,3)，因此范围是 x∈[1,5]、y∈[1,5]。
       for (var i = 0; i < 25; i++) {
-        expect(index.contains(BoardEngine.cols * (1 + i ~/ 5) + 1 + i % 5), isTrue);
+        expect(
+          index.contains(BoardEngine.cols * (1 + i ~/ 5) + 1 + i % 5),
+          isTrue,
+        );
       }
       expect(step.activations.single.comboName, '连环爆裂');
     });
@@ -316,12 +324,20 @@ void main() {
       expect(index.length, 39);
       for (final y in [2, 3, 4]) {
         for (var x = 0; x < BoardEngine.cols; x++) {
-          expect(index.contains(BoardEngine.cols * y + x), isTrue, reason: '第 $y 行应整行清空');
+          expect(
+            index.contains(BoardEngine.cols * y + x),
+            isTrue,
+            reason: '第 $y 行应整行清空',
+          );
         }
       }
       for (final x in [2, 3, 4]) {
         for (var y = 0; y < BoardEngine.rows; y++) {
-          expect(index.contains(BoardEngine.cols * y + x), isTrue, reason: '第 $x 列应整列清空');
+          expect(
+            index.contains(BoardEngine.cols * y + x),
+            isTrue,
+            reason: '第 $x 列应整列清空',
+          );
         }
       }
       expect(step.activations.single.comboName, '破空爆裂');
@@ -334,14 +350,16 @@ void main() {
     });
 
     test('棱镜 + 破空：全场同色会铺开成它们所在的每一行与每一列', () {
-      final step = swapAndResolve(boardOf({
-        a: 'Rp',
-        b: 'Rh',
-        // 同色的宝石零散分布，让"铺开"的效果真正体现出来。
-        8: 'R.',
-        23: 'R.',
-        56: 'R.',
-      }));
+      final step = swapAndResolve(
+        boardOf({
+          a: 'Rp',
+          b: 'Rh',
+          // 同色的宝石零散分布，让"铺开"的效果真正体现出来。
+          8: 'R.',
+          23: 'R.',
+          56: 'R.',
+        }),
+      );
       final index = [for (final c in step.cleared) c.index];
       // 同行同列被整片带走：远比一条线（8 格）或十字（15 格）大。
       expect(index.length, greaterThan(30));
@@ -351,26 +369,40 @@ void main() {
     });
 
     test('棱镜 + 爆裂：范围包含全场同色，也包含以棱镜为中心的 5x5', () {
-      final step = swapAndResolve(boardOf({
-        a: 'Rp',
-        b: 'Rb',
-        0: 'R.',
-        63: 'R.',
-      }));
+      final step = swapAndResolve(
+        boardOf({a: 'Rp', b: 'Rb', 0: 'R.', 63: 'R.'}),
+      );
       final index = {for (final c in step.cleared) c.index};
       expect(step.activations.single.comboName, '棱镜爆裂');
       expect(index.contains(0), isTrue, reason: '全场同色');
       expect(index.contains(63), isTrue, reason: '全场同色');
       // 交换后棱镜落在 b = (4,3)，5x5 覆盖 x∈[2,6]、y∈[1,5]。
-      expect(index.contains(BoardEngine.cols * 1 + 2), isTrue, reason: '5x5 的左上角');
-      expect(index.contains(BoardEngine.cols * 5 + 6), isTrue, reason: '5x5 的右下角');
+      expect(
+        index.contains(BoardEngine.cols * 1 + 2),
+        isTrue,
+        reason: '5x5 的左上角',
+      );
+      expect(
+        index.contains(BoardEngine.cols * 5 + 6),
+        isTrue,
+        reason: '5x5 的右下角',
+      );
       expect(index.length, greaterThan(25));
     });
 
     test('两种组合技的额外伤害都远高于两颗单独引爆之和', () {
-      final cross = swapAndResolve(boardOf({a: 'Rh', b: 'Rv'})).activations.single.bonus;
-      final storm = swapAndResolve(boardOf({a: 'Rp', b: 'Rh'})).activations.single.bonus;
-      final void_ = swapAndResolve(boardOf({a: 'Rp', b: 'Rp'})).activations.single.bonus;
+      final cross = swapAndResolve(boardOf({a: 'Rh', b: 'Rv'}))
+          .activations
+          .single
+          .bonus;
+      final storm = swapAndResolve(boardOf({a: 'Rp', b: 'Rh'}))
+          .activations
+          .single
+          .bonus;
+      final void_ = swapAndResolve(boardOf({a: 'Rp', b: 'Rp'}))
+          .activations
+          .single
+          .bonus;
       // 单颗破空 40、单颗棱镜 150：两颗各炸一次是 80 / 190。
       expect(cross, greaterThan(80));
       expect(storm, greaterThan(190));
@@ -382,8 +414,10 @@ void main() {
       final board = boardOf({a: 'Rh', b: 'Rv', 29: 'Rb'});
       final step = swapAndResolve(board);
       expect(step.activations.length, 2, reason: '组合技 + 被波及的爆裂');
-      expect(step.activations.map((x) => x.comboName).whereType<String>(),
-          contains('十字破空'));
+      expect(
+        step.activations.map((x) => x.comboName).whereType<String>(),
+        contains('十字破空'),
+      );
       // 十字 120 + 单颗爆裂 80。
       expect(step.specialBonus, 200);
     });
@@ -409,10 +443,12 @@ void main() {
         final board = boardOf({a: pair[0], b: pair[1]});
         board.swapCells(a, b);
         board.resolveSwap(a, b);
-        expect(board.countHoles(), 0,
-            reason: '${pair[0]}+${pair[1]} 结算后留下了空洞');
-        expect(board.findMatches(), isEmpty,
-            reason: '${pair[0]}+${pair[1]} 结算完不该剩下现成的三连');
+        expect(board.countHoles(), 0, reason: '${pair[0]}+${pair[1]} 结算后留下了空洞');
+        expect(
+          board.findMatches(),
+          isEmpty,
+          reason: '${pair[0]}+${pair[1]} 结算完不该剩下现成的三连',
+        );
       }
     });
   });

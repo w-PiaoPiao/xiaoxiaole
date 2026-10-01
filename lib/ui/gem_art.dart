@@ -49,19 +49,24 @@ class GemArt {
 
   /// 骷髅的眼睛、鼻腔与牙缝（用底座暗色「挖」出来）。
   static final List<Path> _skullHoles = [
-    Path()..addOval(Rect.fromCircle(center: const Offset(0.33, 0.36), radius: 0.135)),
-    Path()..addOval(Rect.fromCircle(center: const Offset(0.67, 0.36), radius: 0.135)),
+    Path()..addOval(
+      Rect.fromCircle(center: const Offset(0.33, 0.36), radius: 0.135),
+    ),
+    Path()..addOval(
+      Rect.fromCircle(center: const Offset(0.67, 0.36), radius: 0.135),
+    ),
     Path()
       ..moveTo(0.5, 0.52)
       ..lineTo(0.585, 0.66)
       ..lineTo(0.415, 0.66)
       ..close(),
     for (final x in [0.40, 0.50, 0.60])
-      Path()
-        ..addRRect(RRect.fromRectAndRadius(
+      Path()..addRRect(
+        RRect.fromRectAndRadius(
           Rect.fromLTRB(x - 0.022, 0.70, x + 0.022, 0.90),
           const Radius.circular(0.012),
-        )),
+        ),
+      ),
   ];
 
   /// 某种颜色宝石的图标路径（单位空间，占满 0~1）。
@@ -121,15 +126,19 @@ class GemArt {
     p.lineTo(0.455, 0.10);
     p.close();
     // 护手
-    p.addRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTRB(0.29, 0.575, 0.71, 0.645),
-      const Radius.circular(0.04),
-    ));
+    p.addRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTRB(0.29, 0.575, 0.71, 0.645),
+        const Radius.circular(0.04),
+      ),
+    );
     // 握柄
-    p.addRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTRB(0.462, 0.655, 0.538, 0.88),
-      const Radius.circular(0.028),
-    ));
+    p.addRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTRB(0.462, 0.655, 0.538, 0.88),
+        const Radius.circular(0.028),
+      ),
+    );
     // 剑柄头
     p.addOval(Rect.fromCircle(center: const Offset(0.5, 0.915), radius: 0.082));
     return p;
@@ -187,14 +196,18 @@ class GemArt {
   static Path _healCross() {
     final p = Path();
     const thick = 0.175;
-    p.addRRect(RRect.fromRectAndRadius(
-      Rect.fromLTRB(0.5 - thick, 0.05, 0.5 + thick, 0.95),
-      const Radius.circular(0.06),
-    ));
-    p.addRRect(RRect.fromRectAndRadius(
-      Rect.fromLTRB(0.05, 0.5 - thick, 0.95, 0.5 + thick),
-      const Radius.circular(0.06),
-    ));
+    p.addRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTRB(0.5 - thick, 0.05, 0.5 + thick, 0.95),
+        const Radius.circular(0.06),
+      ),
+    );
+    p.addRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTRB(0.05, 0.5 - thick, 0.95, 0.5 + thick),
+        const Radius.circular(0.06),
+      ),
+    );
     return p;
   }
 
@@ -214,15 +227,19 @@ class GemArt {
   static Path _skull() {
     final p = Path();
     // 颅骨
-    p.addRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTRB(0.08, 0.05, 0.92, 0.70),
-      const Radius.circular(0.34),
-    ));
+    p.addRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTRB(0.08, 0.05, 0.92, 0.70),
+        const Radius.circular(0.34),
+      ),
+    );
     // 下颌
-    p.addRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTRB(0.27, 0.62, 0.73, 0.95),
-      const Radius.circular(0.13),
-    ));
+    p.addRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTRB(0.27, 0.62, 0.73, 0.95),
+        const Radius.circular(0.13),
+      ),
+    );
     return p;
   }
 
@@ -263,7 +280,10 @@ class GemArt {
         ..shader = ui.Gradient.linear(
           const Offset(0.5, 0.06),
           const Offset(0.5, 0.30),
-          [Colors.white.withValues(alpha: 0.34), Colors.white.withValues(alpha: 0.0)],
+          [
+            Colors.white.withValues(alpha: 0.34),
+            Colors.white.withValues(alpha: 0.0),
+          ],
         ),
       outline: Paint()
         ..style = PaintingStyle.stroke
@@ -297,10 +317,30 @@ class GemArt {
 
   /// 外发光画笔：只有颜色在变，模糊半径是常量。
   static final Paint _glow = Paint()
-    ..maskFilter = MaskFilter.blur(BlurStyle.outer, 0.20);
+    ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 0.20);
 
   /// 白闪画笔：同样只有透明度在变。
   static final Paint _flash = Paint();
+
+  /// 给共享画笔挂上"整体透明度"滤镜（[fade] 为 false 时清除）。
+  ///
+  /// 消散动画要让整颗宝石一起淡出，过去靠 [Canvas.saveLayer] 做——但那是
+  /// 每颗宝石一块离屏缓冲，棱镜 / 同色风暴一次清三四十颗时就是三四十块，
+  /// 是棋盘上最贵的一项。这里改用 modulate 滤镜把透明度一次乘进所有笔触：
+  /// 重叠处会略有不同（层内先合成再淡出 vs 逐笔淡化），在 0.26 秒的消散
+  /// 里看不出来，省下的却是整条离屏合成路径。
+  ///
+  /// 画笔是全局共享的，所以**每一笔绘制前都要调用**：fade 为 false 时把
+  /// 上一次留下的滤镜清掉，否则下一颗不透明的宝石会跟着变淡。
+  static Paint _applyFade(Paint paint, bool fade, double alpha) {
+    paint.colorFilter = fade
+        ? ColorFilter.mode(
+            Colors.white.withValues(alpha: alpha),
+            BlendMode.modulate,
+          )
+        : null;
+    return paint;
+  }
 
   /// 绘制一颗宝石。
   ///
@@ -326,11 +366,7 @@ class GemArt {
     final left = rect.left + (rect.width - side) / 2;
     final top = rect.top + (rect.height - side) / 2;
     final brush = _brushes[type]!;
-
-    final needsLayer = alpha < 0.99;
-    if (needsLayer) {
-      canvas.saveLayer(rect.inflate(side), Paint()..color = Colors.white.withValues(alpha: alpha));
-    }
+    final fade = alpha < 0.999;
 
     canvas.save();
     canvas.translate(left, top);
@@ -340,32 +376,50 @@ class GemArt {
     if (glow > 0.01) {
       canvas.drawPath(
         _tile,
-        _glow..color = Palette.gem(type).withValues(alpha: (0.6 * glow).clamp(0.0, 1.0)),
+        _applyFade(
+          _glow
+            ..color = Palette.gem(type)
+                .withValues(alpha: (0.6 * glow).clamp(0.0, 1.0)),
+          fade,
+          alpha,
+        ),
       );
     }
 
-    canvas.drawPath(_tile, brush.base);
-    canvas.drawPath(_sheen, brush.sheen);
-    canvas.drawPath(_tile, brush.outline);
-    _paintIcon(canvas, type, brush);
+    canvas.drawPath(_tile, _applyFade(brush.base, fade, alpha));
+    canvas.drawPath(_sheen, _applyFade(brush.sheen, fade, alpha));
+    canvas.drawPath(_tile, _applyFade(brush.outline, fade, alpha));
+    _paintIcon(canvas, type, brush, fade: fade, alpha: alpha);
 
     if (special != SpecialKind.none) {
-      _paintSpecialOverlay(canvas, special, spin);
+      _paintSpecialOverlay(canvas, special, spin, fade: fade, alpha: alpha);
     }
 
     if (flash > 0.01) {
       canvas.drawPath(
         _tile,
-        _flash..color = Colors.white.withValues(alpha: flash.clamp(0.0, 1.0) * 0.9),
+        _applyFade(
+          _flash
+            ..color = Colors.white.withValues(
+              alpha: flash.clamp(0.0, 1.0) * 0.9,
+            ),
+          fade,
+          alpha,
+        ),
       );
     }
 
     canvas.restore();
-    if (needsLayer) canvas.restore();
   }
 
   /// 画图标：先用暗色描一圈保证在亮底上也看得清，再填浅色。
-  static void _paintIcon(Canvas canvas, GemType type, _GemBrush brush) {
+  static void _paintIcon(
+    Canvas canvas,
+    GemType type,
+    _GemBrush brush, {
+    required bool fade,
+    required double alpha,
+  }) {
     final icon = _icons[type]!;
 
     // 图标占底座中间 60%，略微上移一点。
@@ -373,40 +427,47 @@ class GemArt {
     canvas.translate(0.2, 0.19);
     canvas.scale(0.6, 0.6);
 
-    canvas.drawPath(icon, brush.iconShadow);
-    canvas.drawPath(icon, brush.iconFill);
-    canvas.drawPath(icon, brush.iconSheen);
+    canvas.drawPath(icon, _applyFade(brush.iconShadow, fade, alpha));
+    canvas.drawPath(icon, _applyFade(brush.iconFill, fade, alpha));
+    canvas.drawPath(icon, _applyFade(brush.iconSheen, fade, alpha));
 
     // 骷髅要「挖」出眼窝与牙齿，否则只是一块白板
     if (type == GemType.purple) {
       for (final hole in _skullHoles) {
-        canvas.drawPath(hole, brush.detailFill);
+        canvas.drawPath(hole, _applyFade(brush.detailFill, fade, alpha));
       }
-      canvas.drawPath(icon, brush.skullRidge);
+      canvas.drawPath(icon, _applyFade(brush.skullRidge, fade, alpha));
     }
 
     // 盾牌的竖脊与横带
     if (type == GemType.blue) {
-      canvas.drawPath(icon, brush.shieldRidge);
+      canvas.drawPath(icon, _applyFade(brush.shieldRidge, fade, alpha));
     }
 
     canvas.restore();
   }
 
   /// 强化宝石的标记：做成外围光带与方向箭头，避免盖住中间的图标。
-  static void _paintSpecialOverlay(Canvas canvas, SpecialKind kind, double spin) {
+  static void _paintSpecialOverlay(
+    Canvas canvas,
+    SpecialKind kind,
+    double spin, {
+    required bool fade,
+    required double alpha,
+  }) {
     switch (kind) {
       case SpecialKind.lineH:
-        _paintEdgeChevrons(canvas, horizontal: true);
+        _paintEdgeChevrons(canvas, horizontal: true, fade: fade, alpha: alpha);
       case SpecialKind.lineV:
-        _paintEdgeChevrons(canvas, horizontal: false);
+        _paintEdgeChevrons(canvas, horizontal: false, fade: fade, alpha: alpha);
       case SpecialKind.burst:
         // 四角火花 + 亮环
-        canvas.drawPath(_tile, _burstRing);
+        canvas.drawPath(_tile, _applyFade(_burstRing, fade, alpha));
+        final spark = _applyFade(_burstSpark, fade, alpha);
         for (final dx in [-1.0, 1.0]) {
           for (final dy in [-1.0, 1.0]) {
             final p = Offset(0.5 + 0.36 * dx, 0.5 + 0.36 * dy);
-            canvas.drawLine(p, p + Offset(0.14 * dx, 0.14 * dy), _burstSpark);
+            canvas.drawLine(p, p + Offset(0.14 * dx, 0.14 * dy), spark);
           }
         }
       case SpecialKind.prism:
@@ -418,7 +479,7 @@ class GemArt {
           0,
           math.pi * 2,
           false,
-          _prismRing,
+          _applyFade(_prismRing, fade, alpha),
         );
         canvas.restore();
       case SpecialKind.none:
@@ -461,15 +522,21 @@ class GemArt {
     ..color = Colors.white.withValues(alpha: 0.95);
 
   /// 左右（或上下）两个外向箭头，表示这颗宝石会清掉整行 / 整列。
-  static void _paintEdgeChevrons(Canvas canvas, {required bool horizontal}) {
+  static void _paintEdgeChevrons(
+    Canvas canvas, {
+    required bool horizontal,
+    required bool fade,
+    required double alpha,
+  }) {
     canvas.save();
     canvas.translate(0.5, 0.5);
     if (!horizontal) canvas.rotate(math.pi / 2);
+    final chevron = _applyFade(_chevron, fade, alpha);
     for (final dir in [-1.0, 1.0]) {
       final tip = Offset(0.46 * dir, 0);
       final wing = Offset(0.33 * dir, 0.15);
-      canvas.drawLine(Offset(wing.dx, -wing.dy), tip, _chevron);
-      canvas.drawLine(tip, Offset(wing.dx, wing.dy), _chevron);
+      canvas.drawLine(Offset(wing.dx, -wing.dy), tip, chevron);
+      canvas.drawLine(tip, Offset(wing.dx, wing.dy), chevron);
     }
     canvas.restore();
   }

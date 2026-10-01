@@ -59,7 +59,9 @@ class SettingsToggle extends StatelessWidget {
                 child: AnimatedAlign(
                   duration: const Duration(milliseconds: 180),
                   curve: Curves.easeOutCubic,
-                  alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+                  alignment: value
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
                   child: Container(
                     width: 18,
                     height: 18,
@@ -114,10 +116,14 @@ class MenuButton extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(radius),
             gradient: primary
-                ? const LinearGradient(colors: [Palette.gold, Color(0xFFC98A33)])
+                ? const LinearGradient(
+                    colors: [Palette.gold, Color(0xFFC98A33)],
+                  )
                 : null,
             color: primary ? null : Palette.slotFill.withValues(alpha: 0.7),
-            border: Border.all(color: primary ? Palette.gold : Palette.panelEdge),
+            border: Border.all(
+              color: primary ? Palette.gold : Palette.panelEdge,
+            ),
           ),
           child: Text(
             label,

@@ -11,7 +11,6 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gem_battle/app_settings.dart';
 import 'package:gem_battle/engine/battle.dart';
@@ -25,12 +24,9 @@ import 'package:gem_battle/ui/game_screen.dart';
 import 'package:gem_battle/ui/main_menu.dart';
 import 'package:gem_battle/ui/sfx.dart';
 
-import 'package:gem_battle/ui/paint_utils.dart';
 import 'package:gem_battle/ui/palette.dart';
 
-/// macOS 自带、含完整中文字形的字体。测试环境默认字体没有中文字形，
-/// 不加载的话截图里全是方块，看不出真实排版。
-const _cjkFontPath = '/System/Library/Fonts/Supplemental/Arial Unicode.ttf';
+import 'preview_font.dart';
 
 /// 复刻 main.dart 的应用外壳，保证预览与实际运行一致。
 Widget _app({double textScale = 1.0}) {
@@ -47,9 +43,13 @@ Widget _app({double textScale = 1.0}) {
       ),
     ),
     builder: (context, child) => MediaQuery(
-      data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
+      data: MediaQuery.of(context)
+          .copyWith(textScaler: TextScaler.linear(textScale)),
       // 与 main.dart 一致：游戏 HUD 是固定比例的几何布局，字号上限 1.3 倍。
-      child: MediaQuery.withClampedTextScaling(maxScaleFactor: 1.3, child: child!),
+      child: MediaQuery.withClampedTextScaling(
+        maxScaleFactor: 1.3,
+        child: child!,
+      ),
     ),
     home: const GameScreen(),
   );
@@ -71,8 +71,12 @@ Widget _menuApp({double textScale = 1.0}) {
       ),
     ),
     builder: (context, child) => MediaQuery(
-      data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
-      child: MediaQuery.withClampedTextScaling(maxScaleFactor: 1.3, child: child!),
+      data: MediaQuery.of(context)
+          .copyWith(textScaler: TextScaler.linear(textScale)),
+      child: MediaQuery.withClampedTextScaling(
+        maxScaleFactor: 1.3,
+        child: child!,
+      ),
     ),
     home: MainMenuScreen(settings: settings, sfx: SfxController()),
   );
@@ -85,7 +89,8 @@ class _Shot {
   _Shot(this.child);
 
   Future<void> capture(WidgetTester tester, String name) async {
-    final boundary = key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final boundary =
+        key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
     await tester.runAsync(() async {
       final image = await boundary.toImage();
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -99,7 +104,12 @@ class _Shot {
 }
 
 /// 设置一块虚拟屏幕。[logical] 为逻辑尺寸，[topInset] 为状态栏/刘海高度（逻辑像素）。
-void _screen(WidgetTester tester, Size logical, {double topInset = 0, double dpr = 2.0}) {
+void _screen(
+  WidgetTester tester,
+  Size logical, {
+  double topInset = 0,
+  double dpr = 2.0,
+}) {
   tester.view.devicePixelRatio = dpr;
   tester.view.physicalSize = Size(logical.width * dpr, logical.height * dpr);
   tester.view.padding = FakeViewPadding(top: topInset * dpr);
@@ -130,8 +140,13 @@ Future<void> _quiet(WidgetTester tester) async {
 /// 棋盘拆成了「静态底层 + 动态层」两个 CustomPaint，取第一个即可
 /// （两者尺寸位置完全一致）。
 Rect _boardRect(WidgetTester tester) => tester.getRect(
-      find.descendant(of: find.byType(BoardView), matching: find.byType(CustomPaint)).first,
-    );
+  find
+      .descendant(
+        of: find.byType(BoardView),
+        matching: find.byType(CustomPaint),
+      )
+      .first,
+);
 
 Offset _cellCenter(Rect board, int index) {
   final cell = board.width / BoardEngine.cols;
@@ -141,6 +156,8 @@ Offset _cellCenter(Rect board, int index) {
         ((index ~/ BoardEngine.cols) + 0.5) * cell,
       );
 }
+
+int _ix(int x, int y) => y * BoardEngine.cols + x;
 
 /// 棋盘上所有相邻格子对，用于自动试玩。
 List<List<int>> _adjacentPairs() {
@@ -215,14 +232,9 @@ Future<bool> _playUntilEnd(WidgetTester tester, {int maxAttempts = 300}) async {
 
 void main() {
   setUpAll(() async {
-    final bytes = File(_cjkFontPath).readAsBytesSync();
-    final loader = FontLoader('CJK')
-      ..addFont(Future.value(ByteData.sublistView(bytes)));
-    await loader.load();
-    // 画布上的文字（连击提示、伤害飘字、强化宝石的名字）不带 fontFamily，
-    // 测试环境会落到一个"所有字形都是方块"的默认字体上。把默认字体族指到
-    // 刚注册的这个，截图里才看得见这些文字。
-    debugCanvasFontFamily = 'CJK';
+    // 注册中文字体，并把画布上的文字（连击提示、伤害飘字、强化宝石的名字）
+    // 指到它上面——测试环境默认字体会把这些字形画成方块，截图就没法校对了。
+    await loadPreviewFont();
   });
 
   // Pixel 7 一类的常见竖屏：411 x 914 逻辑像素，顶部刘海 47。
@@ -321,16 +333,26 @@ void main() {
 
     void report(String name, Rect r) {
       // ignore: avoid_print
-      print('$name: ${r.width.toStringAsFixed(0)}x${r.height.toStringAsFixed(0)} @ '
-          'x[${r.left.toStringAsFixed(0)},${r.right.toStringAsFixed(0)}] '
-          'y[${r.top.toStringAsFixed(0)},${r.bottom.toStringAsFixed(0)}]');
+      print(
+        '$name: ${r.width.toStringAsFixed(0)}x${r.height.toStringAsFixed(0)} @ '
+        'x[${r.left.toStringAsFixed(0)},${r.right.toStringAsFixed(0)}] '
+        'y[${r.top.toStringAsFixed(0)},${r.bottom.toStringAsFixed(0)}]',
+      );
     }
 
     report('帮助按钮', help);
     report('菜单按钮', menu);
     report('提示按钮', hint);
     report('状态标签所在行', tagStrip);
-    report('棋盘格子', Rect.fromLTWH(0, 0, board.width / BoardEngine.cols, board.width / BoardEngine.cols));
+    report(
+      '棋盘格子',
+      Rect.fromLTWH(
+        0,
+        0,
+        board.width / BoardEngine.cols,
+        board.width / BoardEngine.cols,
+      ),
+    );
 
     final overlap = help.overlaps(tagStrip) || menu.overlaps(tagStrip);
     // ignore: avoid_print
@@ -408,8 +430,16 @@ void main() {
     const a = 27;
     const b = 28;
     final board = _liveBoard(tester);
-    board.cells[a] = Gem(id: 9001, type: GemType.red, special: SpecialKind.lineH);
-    board.cells[b] = Gem(id: 9002, type: GemType.red, special: SpecialKind.lineV);
+    board.cells[a] = Gem(
+      id: 9001,
+      type: GemType.red,
+      special: SpecialKind.lineH,
+    );
+    board.cells[b] = Gem(
+      id: 9002,
+      type: GemType.red,
+      special: SpecialKind.lineV,
+    );
 
     final rect = _boardRect(tester);
     await tester.tapAt(_cellCenter(rect, a));
@@ -547,7 +577,11 @@ void main() {
           maxScaleFactor: 1.3,
           child: child!,
         ),
-        home: GameScreen(settings: AppSettings(), sfx: SfxController(), mode: GameMode.endless),
+        home: GameScreen(
+          settings: AppSettings(),
+          sfx: SfxController(),
+          mode: GameMode.endless,
+        ),
       ),
     );
     await tester.pumpWidget(RepaintBoundary(key: shot.key, child: shot.child));
@@ -593,9 +627,83 @@ void main() {
     _liveBattle(tester).enemyHp = 300;
     final won = await _playToWin(tester, maxMoves: 30);
     expect(won, isTrue, reason: '收不掉残血的第三波 BOSS，就截不到肉鸽三选一');
-    expect(find.text('稀有'), findsWidgets,
-        reason: '保底波的三选一必须含稀有牌，否则这张预览没有覆盖到角标视觉');
+    expect(
+      find.text('稀有'),
+      findsWidgets,
+      reason: '保底波的三选一必须含稀有牌，否则这张预览没有覆盖到角标视觉',
+    );
     await shot.capture(tester, '26_endless_upgrade');
+    await _quiet(tester);
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  testWidgets('机关与道具：三种机关、锤子瞄准与危机关头', (tester) async {
+    _screen(tester, pixel, topInset: 47);
+    final shot = _Shot(
+      MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.dark,
+          fontFamily: 'CJK',
+          scaffoldBackgroundColor: Palette.bgDeep,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Palette.gold,
+            brightness: Brightness.dark,
+          ),
+        ),
+        builder: (context, child) => MediaQuery.withClampedTextScaling(
+          maxScaleFactor: 1.3,
+          child: child!,
+        ),
+        home: GameScreen(settings: AppSettings(), sfx: SfxController()),
+      ),
+    );
+    await tester.pumpWidget(RepaintBoundary(key: shot.key, child: shot.child));
+    await _advance(tester, 3.0);
+
+    // 在棋盘上摆出三种机关（战役第一关本身没有机关，这里手动布景）。
+    final board = _liveBoard(tester);
+    final view = tester.widget<BoardView>(find.byType(BoardView));
+    final locks = <int, ObstacleKind>{
+      _ix(2, 2): ObstacleKind.frost,
+      _ix(5, 3): ObstacleKind.vine,
+      _ix(3, 5): ObstacleKind.altar,
+    };
+    locks.forEach((index, kind) => board.cells[index]!.obstacle = kind);
+    // 让视觉层对齐一次快照，并主动触发一次重绘：棋盘静止时不重绘是性能
+    // 约定（正常游戏里机关在开局入场动画期间就已经画上了）。
+    view.fx.applySnapshot(board.snapshot(), fallDuration: 0.2);
+    view.fx.boardRepaint.ping();
+    await _advance(tester, 1.0);
+    await shot.capture(tester, '27_obstacles');
+
+    // 锤子瞄准：进瞄准态后按住一格，棋盘上出现取景框。
+    await tester.tap(
+      find.byWidgetPredicate(
+        (w) => w is Tooltip && (w.message ?? '').startsWith('锤子'),
+      ),
+    );
+    await _advance(tester, 0.4);
+    final rect = _boardRect(tester);
+    final gesture = await tester.startGesture(_cellCenter(rect, _ix(2, 2)));
+    await _advance(tester, 0.4);
+    await shot.capture(tester, '28_hammer_aim');
+
+    // 松手即落点：正好砸掉 (2,2) 那枚被冰封的宝石。
+    await gesture.up();
+    await _advance(tester, 4.0);
+    expect(
+      view.fx.gems.values.any((g) => g.obstacle == ObstacleKind.frost),
+      isFalse,
+      reason: '锤子应该把冰封砸掉了',
+    );
+
+    // 危机关头：敌人下一击挡不住时，道具栏亮起危险色。
+    final battle = _liveBattle(tester);
+    battle.playerHp = 40;
+    battle.turnsToAttack = 1;
+    await _advance(tester, 0.6);
+    await shot.capture(tester, '29_rescue_hint');
     await _quiet(tester);
   }, timeout: const Timeout(Duration(minutes: 3)));
 

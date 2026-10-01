@@ -62,6 +62,9 @@ class CascadeStep {
   /// 强化宝石引爆带来的额外伤害。
   final int specialBonus;
 
+  /// 本步被破除的机关（相邻消除或爆炸波及）。
+  final List<ObstacleBreak> obstacleBreaks;
+
   const CascadeStep({
     required this.combo,
     required this.cleared,
@@ -71,6 +74,7 @@ class CascadeStep {
     required this.snapshot,
     required this.spawnStartY,
     required this.specialBonus,
+    this.obstacleBreaks = const [],
   });
 
   /// 清除的宝石总数。
@@ -104,9 +108,17 @@ class BoardEngine {
 
   final Random _rng;
 
+  /// 机关布置专用的独立随机源。
+  ///
+  /// 机关位置不能与宝石补位共用随机源：否则"这一关摆几件机关"会连带
+  /// 改变整条宝石序列，平衡报告里改机关数量的前后对比就失去了可比性。
+  final Random _obstacleRng;
+
   int _nextId = 1;
 
-  BoardEngine({int? seed}) : _rng = Random(seed);
+  BoardEngine({int? seed})
+    : _rng = Random(seed),
+      _obstacleRng = Random(seed == null ? null : seed ^ 0x0B57AC1E);
 
   /// 仅用于测试：用固定棋盘构造。
   ///
@@ -120,11 +132,16 @@ class BoardEngine {
       final step = line.length >= cols * 2 ? 2 : 1;
       for (var x = 0; x < cols; x++) {
         final a = line.length > x * step ? line[x * step] : '.';
-        final b = step == 2 && line.length > x * step + 1 ? line[x * step + 1] : '.';
+        final b = step == 2 && line.length > x * step + 1
+            ? line[x * step + 1]
+            : '.';
         final type = _typeFromChar(a);
         if (type == null) continue;
-        board.cells[board.index(x, y)] =
-            Gem(id: board._nextId++, type: type, special: _specialFromChar(b));
+        board.cells[board.index(x, y)] = Gem(
+          id: board._nextId++,
+          type: type,
+          special: _specialFromChar(b),
+        );
       }
     }
     return board;
@@ -172,7 +189,8 @@ class BoardEngine {
 
   Gem? at(int x, int y) => inBounds(x, y) ? cells[index(x, y)] : null;
 
-  Gem? gemAt(int index) => index >= 0 && index < cells.length ? cells[index] : null;
+  Gem? gemAt(int index) =>
+      index >= 0 && index < cells.length ? cells[index] : null;
 
   /// 两格是否上下/左右相邻。
   bool adjacent(int a, int b) {
@@ -180,10 +198,13 @@ class BoardEngine {
     return (ax - bx).abs() + (ay - by).abs() == 1;
   }
 
-  void clearAll() {
-    for (var i = 0; i < cells.length; i++) {
-      cells[i] = null;
-    }
+  /// 四邻格（上下左右，越界的跳过）。
+  Iterable<int> neighborsOf(int i) sync* {
+    final x = xOf(i), y = yOf(i);
+    if (x > 0) yield i - 1;
+    if (x < cols - 1) yield i + 1;
+    if (y > 0) yield i - cols;
+    if (y < rows - 1) yield i + cols;
   }
 
   // ---------------------------------------------------------------- 初始填充
@@ -209,7 +230,10 @@ class BoardEngine {
           banned.add(up1.type);
         }
         final choices = palette.where((t) => !banned.contains(t)).toList();
-        cells[index(x, y)] = Gem(id: _nextId++, type: choices[_rng.nextInt(choices.length)]);
+        cells[index(x, y)] = Gem(
+          id: _nextId++,
+          type: choices[_rng.nextInt(choices.length)],
+        );
       }
     }
   }
@@ -273,15 +297,17 @@ class BoardEngine {
         spawn = SpecialKind.none;
       }
 
-      groups.add(MatchGroup(
-        indices: indices,
-        type: type,
-        hasH: hasH,
-        hasV: hasV,
-        maxRun: maxRun,
-        anchor: _pickAnchor(groupRuns, indices, hasH, hasV),
-        spawn: spawn,
-      ));
+      groups.add(
+        MatchGroup(
+          indices: indices,
+          type: type,
+          hasH: hasH,
+          hasV: hasV,
+          maxRun: maxRun,
+          anchor: _pickAnchor(groupRuns, indices, hasH, hasV),
+          spawn: spawn,
+        ),
+      );
     });
 
     return groups;
@@ -293,12 +319,15 @@ class BoardEngine {
       var x = 0;
       while (x < cols) {
         final gem = cells[index(x, y)];
-        if (gem == null) {
+        // 被机关附着的宝石不参与匹配，也不能被跨越。
+        if (gem == null || gem.locked) {
           x++;
           continue;
         }
         var end = x;
-        while (end + 1 < cols && cells[index(end + 1, y)]?.type == gem.type) {
+        while (end + 1 < cols) {
+          final next = cells[index(end + 1, y)];
+          if (next == null || next.locked || next.type != gem.type) break;
           end++;
         }
         if (end - x + 1 >= 3) runs.add(_Run(true, y, x, end));
@@ -309,12 +338,14 @@ class BoardEngine {
       var y = 0;
       while (y < rows) {
         final gem = cells[index(x, y)];
-        if (gem == null) {
+        if (gem == null || gem.locked) {
           y++;
           continue;
         }
         var end = y;
-        while (end + 1 < rows && cells[index(x, end + 1)]?.type == gem.type) {
+        while (end + 1 < rows) {
+          final next = cells[index(x, end + 1)];
+          if (next == null || next.locked || next.type != gem.type) break;
           end++;
         }
         if (end - y + 1 >= 3) runs.add(_Run(false, x, y, end));
@@ -348,10 +379,13 @@ class BoardEngine {
   // ---------------------------------------------------------------- 交换
 
   /// 判断两格能否交换：必须相邻，且交换后能形成消除（强化宝石例外，总能触发）。
+  ///
+  /// 被机关附着的宝石不能交换——要先用相邻消除（或锤子）把机关破掉。
   bool canSwap(int a, int b) {
     if (!adjacent(a, b)) return false;
     final ga = cells[a], gb = cells[b];
     if (ga == null || gb == null) return false;
+    if (ga.locked || gb.locked) return false;
     if (ga.isSpecial || gb.isSpecial) return true;
     if (ga.type == gb.type) return false;
     return _swapCreatesMatch(a, b);
@@ -379,7 +413,11 @@ class BoardEngine {
       var run = 1;
       for (var x = 1; x < cols; x++) {
         final prev = cells[index(x - 1, y)], cur = cells[index(x, y)];
-        if (cur != null && prev != null && cur.type == prev.type) {
+        if (cur != null &&
+            prev != null &&
+            !cur.locked &&
+            !prev.locked &&
+            cur.type == prev.type) {
           run++;
           if (run >= 3) return true;
         } else {
@@ -391,7 +429,11 @@ class BoardEngine {
       var run = 1;
       for (var y = 1; y < rows; y++) {
         final prev = cells[index(x, y - 1)], cur = cells[index(x, y)];
-        if (cur != null && prev != null && cur.type == prev.type) {
+        if (cur != null &&
+            prev != null &&
+            !cur.locked &&
+            !prev.locked &&
+            cur.type == prev.type) {
           run++;
           if (run >= 3) return true;
         } else {
@@ -406,27 +448,70 @@ class BoardEngine {
   bool hasValidMove() {
     for (var i = 0; i < cells.length; i++) {
       final gem = cells[i];
-      if (gem == null) continue;
+      if (gem == null || gem.locked) continue;
       if (gem.isSpecial) return true;
       final x = xOf(i), y = yOf(i);
-      if (x + 1 < cols && _swapCreatesMatch(i, i + 1)) return true;
-      if (y + 1 < rows && _swapCreatesMatch(i, i + cols)) return true;
+      if (x + 1 < cols && canSwap(i, i + 1)) return true;
+      if (y + 1 < rows && canSwap(i, i + cols)) return true;
     }
     return false;
   }
 
   /// 打乱棋盘直到既没有现成消除、又存在可行操作。
+  ///
+  /// 被机关附着的宝石原样保留（机关是关卡的布置，不该被洗牌冲掉）——
+  /// 失败时会保留机关重排颜色，而不是整盘重建。
   void shuffleBoard() {
     for (var attempt = 0; attempt < 120; attempt++) {
       final gems = <Gem>[for (final g in cells) ?g];
-      final movable = [for (final g in gems) if (!g.isSpecial) g];
+      final movable = [
+        for (final g in gems)
+          if (!g.isSpecial && !g.locked) g,
+      ];
       final types = [for (final g in movable) g.type]..shuffle(_rng);
       for (var i = 0; i < movable.length; i++) {
         movable[i].type = types[i];
       }
       if (findMatches().isEmpty && hasValidMove()) return;
     }
+    // 兜底：整盘重铺，并把机关按原位重新附着（机关是关卡的布置，不能丢）。
+    final kept = <int, ObstacleKind>{
+      for (var i = 0; i < cells.length; i++) i: ?cells[i]?.obstacle,
+    };
     reset();
+    for (final entry in kept.entries) {
+      cells[entry.key]?.obstacle = entry.value;
+    }
+  }
+
+  // ---------------------------------------------------------------- 机关
+
+  /// 指定格上的机关（没有则为 null）。
+  ObstacleKind? obstacleAt(int index) => cells[index]?.obstacle;
+
+  /// 场上某种机关的数量。
+  int countObstacles(ObstacleKind kind) {
+    var count = 0;
+    for (final gem in cells) {
+      if (gem?.obstacle == kind) count++;
+    }
+    return count;
+  }
+
+  /// 开局布置机关：随机挑选普通宝石附着。返回实际布置的数量。
+  ///
+  /// 用机关专属的随机源（见 [_obstacleRng]），所以同一个种子永远得到同一套
+  /// 机关位置，且**不扰动宝石序列**——平衡报告与测试都能复现、能对比。
+  int placeObstacles(ObstacleKind kind, int count) {
+    var placed = 0;
+    for (var guard = 0; placed < count && guard < 600; guard++) {
+      final i = _obstacleRng.nextInt(cells.length);
+      final gem = cells[i];
+      if (gem == null || gem.locked || gem.isSpecial) continue;
+      gem.obstacle = kind;
+      placed++;
+    }
+    return placed;
   }
 
   // ---------------------------------------------------------------- 结算
@@ -436,7 +521,11 @@ class BoardEngine {
   /// [a]、[b] 是本次交换的两格，用于决定强化宝石的生成位置。
   /// [rules] 是玩家 build 对棋盘规则的改写（「棱镜宗师」「爆破工程」
   /// 「十字破空」）。默认值等于现行规则，因此不传的地方行为完全不变。
-  List<CascadeStep> resolveSwap(int a, int b, {BoardRules rules = BoardRules.none}) {
+  List<CascadeStep> resolveSwap(
+    int a,
+    int b, {
+    BoardRules rules = BoardRules.none,
+  }) {
     final steps = <CascadeStep>[];
 
     // 强化宝石被直接交换时立即引爆。两颗强化宝石换到一起则触发**组合技**，
@@ -456,59 +545,108 @@ class BoardEngine {
             ? (cells[partner]?.type ?? gem.type)
             : null;
         seed.add(i);
-        triggers.add(SpecialActivation(
-          index: i,
-          kind: gem.special,
-          type: gem.type,
-          area: _activationArea(i, gem.special, gem.type,
-              prismType: prismType, rules: rules),
-          bonus: _bonusFor(gem.special),
-        ));
+        triggers.add(
+          SpecialActivation(
+            index: i,
+            kind: gem.special,
+            type: gem.type,
+            area: _activationArea(
+              i,
+              gem.special,
+              gem.type,
+              prismType: prismType,
+              rules: rules,
+            ),
+            bonus: _bonusFor(gem.special),
+          ),
+        );
       }
     }
 
     var combo = 1;
     if (triggers.isNotEmpty) {
-      steps.add(_buildStep(
-        combo: combo,
-        seedClear: seed,
-        seedActivations: triggers,
-        spawns: const [],
-        // 组合技已经把两颗宝石的意义一起算进范围了，**两颗都要抑制**：
-        // 它们都已经"用掉"了，谁也不能再按单颗效果炸一遍，否则就又变回
-        // "各炸各的"。（只抑制其中一颗时，另一颗会额外炸出自己的范围。）
-        suppress: merged != null ? {a, b} : const {},
-        rules: rules,
-      ));
+      steps.add(
+        _buildStep(
+          combo: combo,
+          seedClear: seed,
+          seedActivations: triggers,
+          spawns: const [],
+          // 组合技已经把两颗宝石的意义一起算进范围了，**两颗都要抑制**：
+          // 它们都已经"用掉"了，谁也不能再按单颗效果炸一遍，否则就又变回
+          // "各炸各的"。（只抑制其中一颗时，另一颗会额外炸出自己的范围。）
+          suppress: merged != null ? {a, b} : const {},
+          rules: rules,
+        ),
+      );
       combo++;
     }
 
-    var preferred = {a, b};
+    _resolveMatchChain(steps, combo, preferred: {a, b}, rules: rules);
+    return steps;
+  }
+
+  /// 锤子：直接清除指定的一格（不走匹配判定），随后照常结算连锁。
+  ///
+  /// 这正是"玩家主动引爆"：目标格若是强化宝石会被引爆，若附着机关则连机关
+  /// 一起砸碎（冰壳、藤蔓、祭坛与宝石同时消失）；清完之后继续结算正常的连锁，
+  /// 所以落点选得好依然能带出一串连击。
+  List<CascadeStep> resolveSingleClear(
+    int index, {
+    BoardRules rules = BoardRules.none,
+  }) {
+    if (index < 0 || index >= cells.length || cells[index] == null) {
+      return const [];
+    }
+    final steps = <CascadeStep>[
+      _buildStep(
+        combo: 1,
+        seedClear: {index},
+        seedActivations: const [],
+        spawns: const [],
+        rules: rules,
+      ),
+    ];
+    _resolveMatchChain(steps, 2, rules: rules);
+    return steps;
+  }
+
+  /// 反复结算「匹配 → 生成强化宝石 → 下落补充」，直到棋盘安静下来。
+  ///
+  /// [preferred] 只在第一轮生效：交换/落点优先的地方把强化宝石生成在玩家
+  /// 刚操作过的位置，之后的连锁不再有这个偏好。
+  void _resolveMatchChain(
+    List<CascadeStep> steps,
+    int startCombo, {
+    Set<int> preferred = const {},
+    BoardRules rules = BoardRules.none,
+  }) {
+    var combo = startCombo;
+    var anchors = preferred;
     while (true) {
       final groups = findMatches();
       if (groups.isEmpty) break;
       final spawns = <SpecialSpawn>[
         for (final g in groups)
-          if (g.spawn != SpecialKind.none) SpecialSpawn(index: g.anchor, kind: g.spawn, type: g.type),
+          if (g.spawn != SpecialKind.none)
+            SpecialSpawn(index: g.anchor, kind: g.spawn, type: g.type),
       ];
       final seedClear = <int>{};
       for (final g in groups) {
         seedClear.addAll(g.indices);
       }
-      final anchors = _preferredAnchors(groups, preferred);
-
-      steps.add(_buildStep(
-        combo: combo,
-        seedClear: seedClear,
-        seedActivations: const [],
-        spawns: spawns,
-        preferredAnchors: anchors,
-        rules: rules,
-      ));
+      steps.add(
+        _buildStep(
+          combo: combo,
+          seedClear: seedClear,
+          seedActivations: const [],
+          spawns: spawns,
+          preferredAnchors: _preferredAnchors(groups, anchors),
+          rules: rules,
+        ),
+      );
       combo++;
-      preferred = const {};
+      anchors = const {};
     }
-    return steps;
   }
 
   // ------------------------------------------------------------ 强化宝石组合技
@@ -531,7 +669,8 @@ class BoardEngine {
     if (ga == null || gb == null) return null;
     if (!ga.isSpecial || !gb.isSpecial) return null;
 
-    final isPrism = ga.special == SpecialKind.prism && gb.special == SpecialKind.prism;
+    final isPrism =
+        ga.special == SpecialKind.prism && gb.special == SpecialKind.prism;
     if (isPrism) {
       return SpecialActivation(
         index: a,
@@ -553,7 +692,8 @@ class BoardEngine {
       final List<int> extra;
       final String name;
       final int bonus;
-      if (other.special == SpecialKind.lineH || other.special == SpecialKind.lineV) {
+      if (other.special == SpecialKind.lineH ||
+          other.special == SpecialKind.lineV) {
         // 经典「同色风暴」：全场同色，加上它们铺开的每一行与每一列。
         extra = _linesThrough(sameColor);
         name = '同色风暴';
@@ -575,8 +715,10 @@ class BoardEngine {
       );
     }
 
-    final aLine = ga.special == SpecialKind.lineH || ga.special == SpecialKind.lineV;
-    final bLine = gb.special == SpecialKind.lineH || gb.special == SpecialKind.lineV;
+    final aLine =
+        ga.special == SpecialKind.lineH || ga.special == SpecialKind.lineV;
+    final bLine =
+        gb.special == SpecialKind.lineH || gb.special == SpecialKind.lineV;
     if (aLine && bLine) {
       return SpecialActivation(
         index: a,
@@ -608,14 +750,14 @@ class BoardEngine {
   }
 
   List<int> _colorArea(GemType type) => [
-        for (var i = 0; i < cells.length; i++)
-          if (cells[i]?.type == type) i,
-      ];
+    for (var i = 0; i < cells.length; i++)
+      if (cells[i]?.type == type) i,
+  ];
 
   List<int> _crossArea(int index) => {
-        for (var x = 0; x < cols; x++) this.index(x, yOf(index)),
-        for (var y = 0; y < rows; y++) this.index(xOf(index), y),
-      }.toList();
+    for (var x = 0; x < cols; x++) this.index(x, yOf(index)),
+    for (var y = 0; y < rows; y++) this.index(xOf(index), y),
+  }.toList();
 
   /// 以 [index] 为中心的三行三列（去掉超出边界的部分）。
   List<int> _thickCrossArea(int index) {
@@ -656,12 +798,27 @@ class BoardEngine {
   }
 
   /// 在每组里挑出更贴近玩家落点的位置放置强化宝石。
+  ///
+  /// 组内可能同时包含交换的两格（拐角消除时），取离默认生成点最近的那一个：
+  /// 强化宝石落在玩家手指刚经过的地方，比随便取一个更符合"这是我造出来的"。
   Map<int, int> _preferredAnchors(List<MatchGroup> groups, Set<int> preferred) {
     final result = <int, int>{};
     if (preferred.isEmpty) return result;
     for (final g in groups) {
       final hit = preferred.where(g.indices.contains);
-      if (hit.isNotEmpty) result[g.anchor] = hit.first;
+      if (hit.isEmpty) continue;
+      final anchorX = xOf(g.anchor), anchorY = yOf(g.anchor);
+      var best = hit.first;
+      var bestDistance = 1 << 30;
+      for (final candidate in hit) {
+        final distance =
+            (xOf(candidate) - anchorX).abs() + (yOf(candidate) - anchorY).abs();
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = candidate;
+        }
+      }
+      result[g.anchor] = best;
     }
     return result;
   }
@@ -680,35 +837,17 @@ class BoardEngine {
       for (var x = 0; x < cols; x++) index(x, cy),
       for (var y = 0; y < rows; y++) index(cx, y),
     };
-    steps.add(_buildStep(
-      combo: 1,
-      seedClear: seed,
-      seedActivations: const [],
-      spawns: const [],
-      rules: rules,
-    ));
-
-    var combo = 2;
-    while (true) {
-      final groups = findMatches();
-      if (groups.isEmpty) break;
-      final spawns = <SpecialSpawn>[
-        for (final g in groups)
-          if (g.spawn != SpecialKind.none) SpecialSpawn(index: g.anchor, kind: g.spawn, type: g.type),
-      ];
-      final seedClear = <int>{};
-      for (final g in groups) {
-        seedClear.addAll(g.indices);
-      }
-      steps.add(_buildStep(
-        combo: combo,
-        seedClear: seedClear,
+    steps.add(
+      _buildStep(
+        combo: 1,
+        seedClear: seed,
         seedActivations: const [],
-        spawns: spawns,
+        spawns: const [],
         rules: rules,
-      ));
-      combo++;
-    }
+      ),
+    );
+
+    _resolveMatchChain(steps, 2, rules: rules);
     return steps;
   }
 
@@ -727,7 +866,10 @@ class BoardEngine {
       toClear.addAll(activation.area);
     }
     final activations = <SpecialActivation>[...seedActivations];
-    final activated = <int>{for (final a in seedActivations) a.index, ...suppress};
+    final activated = <int>{
+      for (final a in seedActivations) a.index,
+      ...suppress,
+    };
     final queued = <int>{...activated};
     final queue = <int>[];
 
@@ -746,18 +888,23 @@ class BoardEngine {
       final gem = cells[i];
       if (gem == null) continue;
       final area = _activationArea(i, gem.special, gem.type, rules: rules);
-      activations.add(SpecialActivation(
-        index: i,
-        kind: gem.special,
-        type: gem.type,
-        area: area,
-        bonus: _bonusFor(gem.special),
-      ));
+      activations.add(
+        SpecialActivation(
+          index: i,
+          kind: gem.special,
+          type: gem.type,
+          area: area,
+          bonus: _bonusFor(gem.special),
+        ),
+      );
       for (final j in area) {
         if (j == i) continue;
         toClear.add(j);
         final other = cells[j];
-        if (other != null && other.isSpecial && !activated.contains(j) && !queued.contains(j)) {
+        if (other != null &&
+            other.isSpecial &&
+            !activated.contains(j) &&
+            !queued.contains(j)) {
           queue.add(j);
           queued.add(j);
         }
@@ -775,17 +922,37 @@ class BoardEngine {
       }
     }
 
+    // 机关破除：本次清除范围内的任何一格，连同它的四邻，附着的机关都会
+    // 被打碎（强化宝石的爆炸波及同理）。机关只是附着物——破掉之后宝石
+    // 显形；如果那一格本身不在清除范围内，宝石会完好地留在棋盘上，
+    // 成为玩家可以立刻使用的资源。
+    final breaks = <ObstacleBreak>[];
+    final touched = <int>{};
+    for (final i in toClear) {
+      touched.add(i);
+      touched.addAll(neighborsOf(i));
+    }
+    for (final j in touched) {
+      final gem = cells[j];
+      final kind = gem?.obstacle;
+      if (kind == null) continue;
+      gem!.obstacle = null;
+      breaks.add(ObstacleBreak(index: j, kind: kind));
+    }
+
     final cleared = <ClearedGem>[];
     final counts = <GemType, int>{};
     for (final i in toClear) {
       final gem = cells[i];
       if (gem == null) continue;
-      cleared.add(ClearedGem(
-        index: i,
-        gemId: gem.id,
-        type: gem.type,
-        special: gem.special,
-      ));
+      cleared.add(
+        ClearedGem(
+          index: i,
+          gemId: gem.id,
+          type: gem.type,
+          special: gem.special,
+        ),
+      );
       counts[gem.type] = (counts[gem.type] ?? 0) + 1;
       cells[i] = null;
     }
@@ -808,6 +975,7 @@ class BoardEngine {
       snapshot: snapshot(),
       spawnStartY: spawnStartY,
       specialBonus: activations.fold(0, (sum, a) => sum + a.bonus),
+      obstacleBreaks: breaks,
     );
   }
 
@@ -905,7 +1073,10 @@ class BoardEngine {
       }
       var above = 1;
       for (var y = writeY; y >= 0; y--) {
-        final gem = Gem(id: _nextId++, type: palette[_rng.nextInt(palette.length)]);
+        final gem = Gem(
+          id: _nextId++,
+          type: palette[_rng.nextInt(palette.length)],
+        );
         cells[index(x, y)] = gem;
         spawnStartY[gem.id] = -above.toDouble();
         above++;
@@ -919,12 +1090,15 @@ class BoardEngine {
     for (var i = 0; i < cells.length; i++) {
       final gem = cells[i];
       if (gem == null) continue;
-      out.add(GemSnapshot(
-        index: i,
-        gemId: gem.id,
-        type: gem.type,
-        special: gem.special,
-      ));
+      out.add(
+        GemSnapshot(
+          index: i,
+          gemId: gem.id,
+          type: gem.type,
+          special: gem.special,
+          obstacle: gem.obstacle,
+        ),
+      );
     }
     return out;
   }
@@ -946,7 +1120,10 @@ class BoardEngine {
     var filled = 0;
     for (var i = 0; i < cells.length; i++) {
       if (cells[i] != null) continue;
-      final gem = Gem(id: _nextId++, type: palette[_rng.nextInt(palette.length)]);
+      final gem = Gem(
+        id: _nextId++,
+        type: palette[_rng.nextInt(palette.length)],
+      );
       cells[i] = gem;
       spawnStartY?[gem.id] = (i ~/ cols).toDouble() - 2.0;
       filled++;
@@ -955,46 +1132,24 @@ class BoardEngine {
   }
 
   /// 复制一份棋盘，用于「推演这步会怎样」而不影响真实棋盘。
+  ///
+  /// 机关必须一起复制：落子顾问就是在克隆盘上推演的，漏掉机关会让它以为
+  /// 被冰封/毒藤锁住的格子还能参与匹配，从而推荐一步在真实棋盘上根本走不出
+  /// 的"妙手"（带机关的关卡里提示会整片失真）。
   BoardEngine clone() {
     final copy = BoardEngine(seed: _rng.nextInt(1 << 30));
     for (var i = 0; i < cells.length; i++) {
       final gem = cells[i];
       if (gem != null) {
-        copy.cells[i] = Gem(id: gem.id, type: gem.type, special: gem.special);
+        copy.cells[i] = Gem(
+          id: gem.id,
+          type: gem.type,
+          special: gem.special,
+          obstacle: gem.obstacle,
+        );
       }
     }
     copy._nextId = _nextId;
     return copy;
-  }
-
-  /// 调试用：把棋盘打印成文本。
-  String debugPrint() {
-    final buffer = StringBuffer();
-    for (var y = 0; y < rows; y++) {
-      for (var x = 0; x < cols; x++) {
-        final gem = cells[index(x, y)];
-        if (gem == null) {
-          buffer.write('..');
-          continue;
-        }
-        const letters = {
-          GemType.red: 'R',
-          GemType.blue: 'B',
-          GemType.green: 'G',
-          GemType.yellow: 'Y',
-          GemType.purple: 'P',
-        };
-        const marks = {
-          SpecialKind.none: '.',
-          SpecialKind.lineH: 'h',
-          SpecialKind.lineV: 'v',
-          SpecialKind.burst: 'b',
-          SpecialKind.prism: 'p',
-        };
-        buffer.write('${letters[gem.type]}${marks[gem.special]}');
-      }
-      buffer.write('\n');
-    }
-    return buffer.toString();
   }
 }

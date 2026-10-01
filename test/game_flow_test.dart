@@ -5,6 +5,8 @@ import 'package:gem_battle/ui/battle_view.dart';
 import 'package:gem_battle/ui/game_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/widget.dart';
+
 /// 一局的流程状态机：这里守的是"玩家永远有路可走"。
 ///
 /// 结算面板上的「关卡选择」会把面板收起来、换成暂停菜单；如果关掉菜单后
@@ -18,28 +20,6 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
-
-  /// 逐帧推进：GameScreen 把每帧 dt 截到 0.12 秒，一次 pump 一大段时间
-  /// 只会走 0.12 秒，所以按 100ms 逐帧推进。
-  Future<void> advance(WidgetTester tester, double seconds) async {
-    final steps = (seconds / 0.1).ceil();
-    for (var i = 0; i < steps; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-  }
-
-  /// 推进到 [finder] 出现为止（最多等 [timeout] 秒）。
-  Future<void> waitFor(
-    WidgetTester tester,
-    Finder finder, {
-    double timeout = 10,
-  }) async {
-    final steps = (timeout / 0.1).ceil();
-    for (var i = 0; i < steps; i++) {
-      if (finder.evaluate().isNotEmpty) return;
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-  }
 
   /// 起一局，并把这一局置成已经输掉的样子。
   Future<void> pumpLostRun(WidgetTester tester, {int level = 5}) async {

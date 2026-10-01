@@ -10,6 +10,7 @@ import '../engine/battle.dart';
 import '../engine/board.dart';
 import '../engine/endless.dart';
 import '../engine/gem.dart';
+import '../engine/items.dart';
 import '../engine/levels.dart';
 import '../engine/move_advisor.dart';
 import '../engine/roguelike.dart';
@@ -19,6 +20,7 @@ import 'board_view.dart';
 import 'fx.dart';
 import 'help_panel.dart';
 import 'hud.dart';
+import 'item_art.dart';
 import 'menu_overlay.dart';
 import 'palette.dart';
 import 'sfx.dart';
@@ -61,7 +63,8 @@ class GameScreen extends StatefulWidget {
   State<GameScreen> createState() => _GameScreenState();
 }
 
-class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateMixin {
+class _GameScreenState extends State<GameScreen>
+    with SingleTickerProviderStateMixin {
   late final Ticker _ticker;
   late final FxController fx;
   late final AppSettings settings;
@@ -108,6 +111,12 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   /// 必杀是否处于「选择落点」状态：此时棋盘上每一次点击都是落点。
   bool _aimingUltimate = false;
 
+  /// 道具是否处于「选择落点」状态（锤子）：与必杀互斥。
+  bool _aimingItem = false;
+
+  /// 本局剩余的道具（道具 id → 数量）。每关开局补足，用掉不累积。
+  final Map<String, int> _items = {};
+
   /// 本关统计：结算面板用来给出评价。
   int _maxCombo = 0;
   int _totalDamage = 0;
@@ -131,7 +140,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       settings = providedSettings;
     } else {
       settings = AppSettings();
-      settings.load();
+      unawaited(settings.load());
     }
     final providedSfx = widget.sfx;
     if (providedSfx != null) {
@@ -139,7 +148,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     } else {
       sfx = SfxController();
       _ownsSfx = true;
-      sfx.load();
+      unawaited(sfx.load());
     }
     settings.addListener(_applySettings);
     // 注意：这里不能立刻应用设置——_applySettings 要读 MediaQuery，
@@ -151,6 +160,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (resume != null) {
       _levelIndex = _clampLevel(resume.level);
       _taken.addAll(resume.upgrades);
+      _items.addAll(resume.items);
       _profile = UpgradePool.profileFor(_taken);
       // 生命缺失（旧存档或损坏值）时按满血开局，而不是 1 血被秒。
       _carryHp = resume.carryHp > 0
@@ -182,12 +192,15 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 
   void _persistResume() {
-    settings.saveResume(ResumeData(
-      mode: widget.mode,
-      level: _levelIndex,
-      carryHp: _carryHp,
-      upgrades: Map.of(_taken),
-    ));
+    settings.saveResume(
+      ResumeData(
+        mode: widget.mode,
+        level: _levelIndex,
+        carryHp: _carryHp,
+        upgrades: Map.of(_taken),
+        items: Map.of(_items),
+      ),
+    );
   }
 
   @override
@@ -199,7 +212,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     fx.dispose();
     // 自建的音效控制器要自己收尾：一套池子是 11 种音效 × 3 个播放器，
     // 预览/测试进程反复进出 GameScreen 会一路累积。
-    if (_ownsSfx) sfx.dispose();
+    if (_ownsSfx) unawaited(sfx.dispose());
     super.dispose();
   }
 
@@ -213,7 +226,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   void _applySettings() {
     sfx.soundEnabled = settings.sound;
     sfx.hapticsEnabled = settings.haptics;
-    final reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     fx.allowShake = settings.screenShake && !reduceMotion;
     fx.allowFlash = !reduceMotion;
     fx.reducedMotion = reduceMotion;
@@ -240,7 +254,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       if (_busyElapsed > 6.0 && battle.isOver) {
         _busyElapsed = 0;
         _busy = false;
-        _handleBattleEnd(_runId);
+        unawaited(_handleBattleEnd(_runId));
         _ensureVisualSync('定局兜底');
         _refresh();
       }
@@ -257,7 +271,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       if (_sinceCheck >= 1.0) {
         _sinceCheck = 0;
         if (battle.isOver) {
-          _handleBattleEnd(_runId);
+          unawaited(_handleBattleEnd(_runId));
         } else {
           _ensureVisualSync('空闲巡检');
         }
@@ -278,6 +292,16 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     _levelIndex = index;
     final level = _currentLevel;
     board = BoardEngine()..reset();
+    // 本关的机关：关卡配置决定种类与数量，位置由棋盘自己的随机源决定
+    // （同一个种子永远得到同一张棋盘，平衡报告与测试都能复现）。
+    for (final entry in level.obstacles.entries) {
+      board.placeObstacles(entry.key, entry.value);
+    }
+    // 道具每关补足（用掉不累积、也不会清零）。
+    final restocked = refillItems(_items);
+    _items
+      ..clear()
+      ..addAll(restocked);
     battle = BattleState(
       def: level.enemy,
       levelIndex: index,
@@ -296,6 +320,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     _totalDamage = 0;
     _endResolved = false;
     _aimingUltimate = false;
+    _aimingItem = false;
     // 上一关留下的三张候选牌必须清掉：从菜单直接跳关时，上一关的牌
     // 不该跟过来（否则会变成"给第 2 关发第 1 关的奖励"）。
     _offer = const [];
@@ -309,11 +334,13 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     // 开场卡停留一会儿后自动进入战斗（可以点击提前跳过）。
     // 用世代号而不是关卡号做身份：同一关在 2 秒内重开时，旧定时器必须失效。
     final run = _runId;
-    _pause(2.0).then((_) {
-      if (_disposed || run != _runId) return;
-      if (!_showIntro) return; // 玩家已经手动跳过
-      setState(() => _showIntro = false);
-    });
+    unawaited(
+      _pause(2.0).then((_) {
+        if (_disposed || run != _runId) return;
+        if (!_showIntro) return; // 玩家已经手动跳过
+        setState(() => _showIntro = false);
+      }),
+    );
   }
 
   /// 开局时让宝石从棋盘上方依次落入。
@@ -336,8 +363,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (holes > 0) {
       board.refillHoles();
       if (kDebugMode) {
-        debugPrint('⚠️ 引擎棋盘出现 $holes 个空洞[$where]，已补全（这属于不该发生的情况，'
-            '请把这条日志连同操作步骤一并反馈）');
+        debugPrint(
+          '⚠️ 引擎棋盘出现 $holes 个空洞[$where]，已补全（这属于不该发生的情况，'
+          '请把这条日志连同操作步骤一并反馈）',
+        );
       }
     }
 
@@ -352,15 +381,18 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       if (visual == null) continue;
       final gx = (cell.index % BoardEngine.cols).toDouble();
       final gy = (cell.index ~/ BoardEngine.cols).toDouble();
-      final brokenPosition = !visual.x.isFinite ||
+      final brokenPosition =
+          !visual.x.isFinite ||
           !visual.y.isFinite ||
           (!visual.moving && (visual.x - gx).abs() > 0.01);
       if ((visual.toX - gx).abs() > 0.01 ||
           (visual.toY - gy).abs() > 0.01 ||
           brokenPosition) {
         if (misplaced.length < 4) {
-          misplaced.add('#${cell.gemId}→格${cell.index} 目标(${visual.toX},${visual.toY}) '
-              '当前(${visual.x.toStringAsFixed(2)},${visual.y.toStringAsFixed(2)}) t=${visual.t.toStringAsFixed(2)}');
+          misplaced.add(
+            '#${cell.gemId}→格${cell.index} 目标(${visual.toX},${visual.toY}) '
+            '当前(${visual.x.toStringAsFixed(2)},${visual.y.toStringAsFixed(2)}) t=${visual.t.toStringAsFixed(2)}',
+          );
         }
       }
     }
@@ -371,10 +403,16 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       return;
     }
 
-    {
+    // release 构建不再写这些排查日志：它们只在调试时需要，而 debugPrint
+    // 在发布包里依然会输出（真机日志里刷屏、也白费一点开销）。
+    if (kDebugMode) {
       final visuals = fx.gems.values.toList();
-      final outside = visuals.where((g) => g.y < 0 || g.y > BoardEngine.rows - 1).length;
-      final broken = visuals.where((g) => !g.x.isFinite || !g.y.isFinite).length;
+      final outside = visuals
+          .where((g) => g.y < 0 || g.y > BoardEngine.rows - 1)
+          .length;
+      final broken = visuals
+          .where((g) => !g.x.isFinite || !g.y.isFinite)
+          .length;
       final missing = expected.difference(actual);
       debugPrint(
         '⚠️ 视觉层脱节[$where] 引擎=${expected.length} 视觉=${actual.length} '
@@ -403,13 +441,24 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   /// 打开菜单/说明等遮罩时，棋盘输入一律屏蔽。
   bool get _inputBlocked =>
-      _busy || battle.isOver || _showIntro || _showResult || _showMenu || _showHelp;
+      _busy ||
+      battle.isOver ||
+      _showIntro ||
+      _showResult ||
+      _showMenu ||
+      _showHelp;
 
   void _onSelect(int index) {
-    // 选落点模式下，点哪儿就在哪儿放必杀——这是玩家自己的决定，
-    // 也是「攒了半天怒气，终于能打在最好的位置上」的那份主动权。
+    // 瞄准态优先：点哪儿就在哪儿落地。
+    //  - 道具（锤子）：砸掉这一格；
+    //  - 必杀：这是玩家自己的决定，也是「攒了半天怒气，终于能打在最好的
+    //    位置上」的那份主动权。
+    if (_aimingItem) {
+      unawaited(_useHammer(index));
+      return;
+    }
     if (_aimingUltimate) {
-      _fireUltimate(index);
+      unawaited(_fireUltimate(index));
       return;
     }
     if (_inputBlocked) return;
@@ -426,7 +475,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     }
     if (board.adjacent(current, index)) {
       setState(() => _selected = null);
-      _attemptSwap(current, index);
+      unawaited(_attemptSwap(current, index));
       return;
     }
     setState(() => _selected = index);
@@ -434,10 +483,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   void _onSwapRequest(int a, int b) {
     // 瞄准期间拖动不算交换：那只是在移动手指，不该把棋盘搅乱。
-    if (_inputBlocked || _aimingUltimate) return;
+    if (_inputBlocked || _aimingUltimate || _aimingItem) return;
     _clearHint();
     setState(() => _selected = null);
-    _attemptSwap(a, b);
+    unawaited(_attemptSwap(a, b));
   }
 
   Future<void> _attemptSwap(int a, int b) async {
@@ -505,6 +554,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     _clearHint();
     setState(() {
       _aimingUltimate = true;
+      _aimingItem = false;
       _selected = null;
     });
   }
@@ -530,9 +580,18 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
       // 与普通交换一样带上玩家的棋盘规则：连锁里被波及的强化宝石
       // 也要按 build 引爆（「爆破工程」的必杀同样是 5x5）。
-      final steps = engine.resolveUltimate(centerIndex, rules: state.profile.boardRules);
+      final steps = engine.resolveUltimate(
+        centerIndex,
+        rules: state.profile.boardRules,
+      );
       // 倍率取自这一局的档案：换局后 _profile 可能已经变了。
-      await _playSteps(run, engine, state, steps, multiplier: state.profile.ultimateMultiplier);
+      await _playSteps(
+        run,
+        engine,
+        state,
+        steps,
+        multiplier: state.profile.ultimateMultiplier,
+      );
       await _finishTurn(run, engine, state);
     } finally {
       if (!_disposed && run == _runId) {
@@ -543,9 +602,181 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     }
   }
 
+  // ------------------------------------------------------------------ 道具
+
+  /// 「临门一脚」：敌人下一击挡不住、手里还有道具——道具栏该闪起来了。
+  ///
+  /// 这是被行业反复验证的"救场时机"：提示要在玩家真正需要的那一刻出现，
+  /// 而不是一直挂着，否则就变成了需要无视的噪音。
+  bool get _itemRescueMoment {
+    if (battle.isOver || !battle.dangerImminent) return false;
+    if (!_items.values.any((n) => n > 0)) return false;
+    return battle.incomingDamage >= battle.playerHp + battle.shield;
+  }
+
+  /// 道具栏的总入口。
+  void _useItem(ItemKind kind) {
+    switch (kind) {
+      case ItemKind.hammer:
+        _armHammer();
+      case ItemKind.shuffle:
+        unawaited(_useShuffle());
+      case ItemKind.stall:
+        _useStall();
+    }
+  }
+
+  /// 点锤子：进入 / 退出「选择落点」状态。
+  void _armHammer() {
+    if (_busy || battle.isOver) return;
+    if ((_items[ItemKind.hammer.id] ?? 0) <= 0) return;
+    if (_aimingItem) {
+      setState(() => _aimingItem = false);
+      return;
+    }
+    sfx.tap();
+    _clearHint();
+    setState(() {
+      _aimingItem = true;
+      _aimingUltimate = false;
+      _selected = null;
+    });
+  }
+
+  /// 锤子落点：砸掉这一格（机关连壳砸碎），随后照常结算连锁。
+  ///
+  /// 道具**不消耗回合**：砸完不推进敌人的出手倒计时——这正是它们"救场"的
+  /// 意义所在，数量有限来平衡。
+  Future<void> _useHammer(int index) async {
+    if (_busy || !_aimingItem) return;
+    if (board.cells[index] == null) return;
+    _items[ItemKind.hammer.id] = math.max(
+      0,
+      (_items[ItemKind.hammer.id] ?? 1) - 1,
+    );
+    // 道具是「继续游戏」存档的一部分：用掉之后立刻写档，否则中途退出重进
+    // 会把已经砸掉的锤子又变回来。
+    _persistResume();
+    _busy = true;
+    setState(() {
+      _aimingItem = false;
+      _selected = null;
+    });
+    final run = _runId;
+    final engine = board;
+    final state = battle;
+    try {
+      sfx.spawnSpecial();
+      fx.addLabel(
+        '锤击',
+        (index % BoardEngine.cols) + 0.5,
+        (index ~/ BoardEngine.cols) - 0.15,
+        Palette.gold,
+        size: 22,
+      );
+      fx.shakeBy(9);
+      final steps = engine.resolveSingleClear(
+        index,
+        rules: state.profile.boardRules,
+      );
+      if (steps.isEmpty) return;
+      await _playSteps(run, engine, state, steps);
+      await _afterItemUse(run, engine, state);
+    } finally {
+      if (!_disposed && run == _runId) {
+        _busy = false;
+        _ensureVisualSync('道具结算');
+        _refresh();
+      }
+    }
+  }
+
+  /// 洗牌：重排棋盘颜色（机关原样保留）。
+  Future<void> _useShuffle() async {
+    if (_busy || battle.isOver) return;
+    if ((_items[ItemKind.shuffle.id] ?? 0) <= 0) return;
+    _items[ItemKind.shuffle.id] = math.max(
+      0,
+      (_items[ItemKind.shuffle.id] ?? 1) - 1,
+    );
+    _persistResume();
+    _busy = true;
+    final run = _runId;
+    final engine = board;
+    final state = battle;
+    try {
+      sfx.spawnSpecial();
+      fx.shakeBy(7);
+      engine.shuffleBoard();
+      fx.applySnapshot(engine.snapshot(), fallDuration: 0.35);
+      fx.addLabel(
+        '洗牌',
+        BoardEngine.cols / 2,
+        BoardEngine.rows / 2,
+        Palette.shield,
+        size: 26,
+      );
+      await fx.settle();
+      if (_disposed || run != _runId) return;
+      await _afterItemUse(run, engine, state);
+    } finally {
+      if (!_disposed && run == _runId) {
+        _busy = false;
+        _ensureVisualSync('洗牌');
+        _refresh();
+      }
+    }
+  }
+
+  /// 凝滞：把敌人的出手往后推一回合。倒计时已满时不消耗道具。
+  void _useStall() {
+    if (_busy || battle.isOver) return;
+    if ((_items[ItemKind.stall.id] ?? 0) <= 0) return;
+    final delayed = battle.delayEnemyAttack();
+    if (delayed == 0) {
+      sfx.reject();
+      _refresh();
+      return;
+    }
+    _items[ItemKind.stall.id] = math.max(
+      0,
+      (_items[ItemKind.stall.id] ?? 1) - 1,
+    );
+    _persistResume();
+    sfx.tap();
+    fx.addFloat('敌方延后 1 回合', Palette.shield, ny: 0.30, size: 24);
+    _refresh();
+  }
+
+  /// 道具用完之后的收尾：不推进敌人回合，只处理胜负与无解重排。
+  Future<void> _afterItemUse(
+    int run,
+    BoardEngine engine,
+    BattleState state,
+  ) async {
+    if (_disposed || run != _runId) return;
+    if (state.isOver) {
+      await _handleBattleEnd(run);
+      return;
+    }
+    if (!engine.hasValidMove()) {
+      engine.shuffleBoard();
+      fx.applySnapshot(engine.snapshot(), fallDuration: 0.35);
+      fx.addLabel(
+        '重新排列',
+        BoardEngine.cols / 2,
+        BoardEngine.rows / 2,
+        Palette.shield,
+        size: 26,
+      );
+      await fx.settle();
+      _refresh();
+    }
+  }
+
   /// 让落子顾问推演一步，把建议的两个格子高亮出来。
   void _requestHint() {
-    if (_inputBlocked || _aimingUltimate) return;
+    if (_inputBlocked || _aimingUltimate || _aimingItem) return;
     final suggestion = const MoveAdvisor().suggest(board, battle);
     if (suggestion == null) return;
     sfx.tap();
@@ -635,12 +866,34 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       // 刚落位这一刻，视觉层必须与快照完全对齐（可能有宝石还在下落途中）。
       assert(() {
         if (fx.gems.length != step.snapshot.length) {
-          debugPrint('⚠️ 快照未完整落到视觉层: 快照=${step.snapshot.length} '
-              '视觉=${fx.gems.length} combo=${step.combo} '
-              '移除数=${step.cleared.length} 生成数=${step.spawns.length}');
+          debugPrint(
+            '⚠️ 快照未完整落到视觉层: 快照=${step.snapshot.length} '
+            '视觉=${fx.gems.length} combo=${step.combo} '
+            '移除数=${step.cleared.length} 生成数=${step.spawns.length}',
+          );
         }
         return true;
       }());
+
+      // 机关破除：碎裂环 + 飘字；祭坛额外把怒气补给塞给玩家。
+      if (step.obstacleBreaks.isNotEmpty) {
+        sfx.impact(weight: 0.9);
+        for (final brk in step.obstacleBreaks) {
+          fx.crackObstacle(brk.index, brk.kind);
+          if (brk.kind == ObstacleKind.altar) {
+            final gained = battle.grantRage(BattleState.altarRageReward);
+            if (gained > 0) {
+              fx.addFloat(
+                '祭坛 +$gained 怒气',
+                Palette.gold,
+                nx: _laneRight,
+                ny: 0.90,
+                size: 20,
+              );
+            }
+          }
+        }
+      }
 
       // 先按宝石类型打出对应的攻击演出，再结算伤害——先看到"打出去"，
       // 再看到"打中了"，节奏比数字直接跳出来有打击感得多。
@@ -685,8 +938,15 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 
   /// 玩家行动结束 → 敌方回合 → 无解重排。同样带世代号。
-  Future<void> _finishTurn(int run, BoardEngine board, BattleState battle) async {
+  Future<void> _finishTurn(
+    int run,
+    BoardEngine board,
+    BattleState battle,
+  ) async {
     if (_disposed || run != _runId) return;
+    // 棋盘上的毒藤每一株都在给敌人加码：进敌方回合前同步一次数量，
+    // 被清掉的藤蔓从下一击起就不再算数。
+    battle.vineCount = board.countObstacles(ObstacleKind.vine);
     if (battle.isOver) {
       await _handleBattleEnd(run);
       return;
@@ -700,12 +960,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       if (_disposed || run != _runId) return;
       // 敌人出手：爪痕落在玩家一侧 + 全屏震动 + 边缘红闪
       final hit = incoming.first.amount;
-      fx.addStrike(
-        StrikeKind.enemyHit,
-        count: hit ~/ 20,
-        ny: 0.86,
-        nx: 0.5,
-      );
+      fx.addStrike(StrikeKind.enemyHit, count: hit ~/ 20, ny: 0.86, nx: 0.5);
       fx.hitStop = 0.06;
       fx.shakeBy(20);
       fx.playerFlash = fx.allowFlash ? 1 : 0;
@@ -726,7 +981,13 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (!board.hasValidMove()) {
       board.shuffleBoard();
       fx.applySnapshot(board.snapshot(), fallDuration: 0.35);
-      fx.addLabel('重新排列', BoardEngine.cols / 2, BoardEngine.rows / 2, Palette.shield, size: 26);
+      fx.addLabel(
+        '重新排列',
+        BoardEngine.cols / 2,
+        BoardEngine.rows / 2,
+        Palette.shield,
+        size: 26,
+      );
       await fx.settle();
       _refresh();
     }
@@ -740,6 +1001,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     if (_disposed || run != _runId) return;
     _endResolved = true;
     _aimingUltimate = false;
+    _aimingItem = false;
     final campaign = widget.mode == GameMode.campaign;
     if (battle.isWon) {
       // 过关奖励：血量按「最大生命的 50%」保底后再补 25%。
@@ -916,13 +1178,25 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         .where((e) => e.kind == CombatEventKind.enemyShield)
         .fold(0, (sum, e) => sum + e.amount);
     if (blocked > 0) {
-      fx.addFloat('护盾抵挡 $blocked', Palette.shield, nx: 0.50, ny: 0.36, size: 17);
+      fx.addFloat(
+        '护盾抵挡 $blocked',
+        Palette.shield,
+        nx: 0.50,
+        ny: 0.36,
+        size: 17,
+      );
     }
     final drain = events
         .where((e) => e.kind == CombatEventKind.enemyDrain)
         .fold(0, (sum, e) => sum + e.amount);
     if (drain > 0) {
-      fx.addFloat('吸血 +$drain', const Color(0xFFB44BFF), nx: 0.76, ny: 0.50, size: 18);
+      fx.addFloat(
+        '吸血 +$drain',
+        const Color(0xFFB44BFF),
+        nx: 0.76,
+        ny: 0.50,
+        size: 18,
+      );
     }
     if (events.any((e) => e.kind == CombatEventKind.enrage)) {
       fx.addFloat('狂暴', Palette.danger, nx: 0.50, ny: 0.30, size: 30);
@@ -945,9 +1219,21 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             size: 22,
           );
         case CombatEventKind.shieldGain:
-          fx.addFloat('+${e.amount} 护盾', Palette.shield, nx: _laneLeft, ny: 0.90, size: 20);
+          fx.addFloat(
+            '+${e.amount} 护盾',
+            Palette.shield,
+            nx: _laneLeft,
+            ny: 0.90,
+            size: 20,
+          );
         case CombatEventKind.rage:
-          fx.addFloat('怒气 +${e.amount}', Palette.rage, nx: _laneRight, ny: 0.90, size: 17);
+          fx.addFloat(
+            '怒气 +${e.amount}',
+            Palette.rage,
+            nx: _laneRight,
+            ny: 0.90,
+            size: 17,
+          );
         case CombatEventKind.curse:
           fx.addFloat(
             '易伤 +${e.amount}',
@@ -957,12 +1243,30 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             size: 19,
           );
         case CombatEventKind.healBlocked:
-          fx.addFloat('治疗 -${e.amount}', const Color(0xFFE85A7A), nx: _laneRight, ny: 0.74, size: 17);
+          fx.addFloat(
+            '治疗 -${e.amount}',
+            const Color(0xFFE85A7A),
+            nx: _laneRight,
+            ny: 0.74,
+            size: 17,
+          );
         case CombatEventKind.selfBleed:
           // 代价类强化的自损：让玩家每次都被提醒"这份力量是买来的"。
-          fx.addFloat('代价 -${e.amount}', const Color(0xFFFF3B5C), nx: _laneRight, ny: 0.70, size: 18);
+          fx.addFloat(
+            '代价 -${e.amount}',
+            const Color(0xFFFF3B5C),
+            nx: _laneRight,
+            ny: 0.70,
+            size: 18,
+          );
         case CombatEventKind.rageDrain:
-          fx.addFloat('怒气 -${e.amount}', const Color(0xFF57E0C8), nx: _laneRight, ny: 0.74, size: 17);
+          fx.addFloat(
+            '怒气 -${e.amount}',
+            const Color(0xFF57E0C8),
+            nx: _laneRight,
+            ny: 0.74,
+            size: 17,
+          );
         case CombatEventKind.enemyAttack:
           fx.addFloat(
             e.text == '重击' ? '重击 -${e.amount}' : '-${e.amount}',
@@ -972,7 +1276,13 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             size: e.text == '重击' ? 34 : 28,
           );
         case CombatEventKind.playerShield:
-          fx.addFloat('护盾抵挡 ${e.amount}', Palette.shield, nx: 0.50, ny: 0.95, size: 18);
+          fx.addFloat(
+            '护盾抵挡 ${e.amount}',
+            Palette.shield,
+            nx: 0.50,
+            ny: 0.95,
+            size: 18,
+          );
         case CombatEventKind.enemyGuard:
           fx.addFloat(
             '敌方护盾 +${e.amount}',
@@ -1018,15 +1328,18 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                       _showMenu = false;
                       _showHelp = true;
                       _aimingUltimate = false;
+                      _aimingItem = false;
                     }),
                     onMenu: () => setState(() {
                       _showHelp = false;
                       _showMenu = true;
                       _aimingUltimate = false;
+                      _aimingItem = false;
                     }),
                   ),
                 ),
                 _playerStrip(),
+                _itemBar(),
                 Expanded(
                   flex: 54,
                   child: Padding(
@@ -1039,6 +1352,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                       hintB: _hintB,
                       enabled: !_inputBlocked,
                       aimingUltimate: _aimingUltimate,
+                      itemTargeting: _aimingItem,
                       onSelect: _onSelect,
                       onSwapRequest: _onSwapRequest,
                       onPress: (_) => sfx.tap(),
@@ -1053,6 +1367,102 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           if (_showMenu) _menuOverlay(),
           if (_showHelp) _helpOverlay(),
         ],
+      ),
+    );
+  }
+
+  /// 道具栏：三件一次性支援道具。
+  ///
+  /// 放在状态条与棋盘之间的独立一栏，而不是挤进状态条那一行——320 像素的
+  /// 小屏上，那一行已经被血条、徽章、提示与必杀按钮占满了。
+  Widget _itemBar() {
+    final rescue = _itemRescueMoment;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: Row(
+        children: [
+          for (final kind in ItemKind.values) ...[
+            if (kind != ItemKind.values.first) const SizedBox(width: 8),
+            Expanded(child: _itemButton(kind, rescue: rescue)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _itemButton(ItemKind kind, {required bool rescue}) {
+    final count = _items[kind.id] ?? 0;
+    final enabled = count > 0 && !_inputBlocked && !battle.isOver;
+    final active = kind == ItemKind.hammer && _aimingItem;
+    // 危机关头（下一击挡不住）闪起来的是"能救命的那几件"——这里让整栏
+    // 都用危险色描边，玩家一眼就知道该看这里。
+    final highlight = active || rescue;
+    final accent = active ? Palette.gold : Palette.danger;
+    final tight = MediaQuery.sizeOf(context).width < 380;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: '${kind.label}，${kind.description}，剩余 $count 个',
+      child: GestureDetector(
+        onTap: enabled ? () => _useItem(kind) : null,
+        child: Tooltip(
+          message: '${kind.label} · ${kind.description}',
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            height: 46,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(13),
+              color: active
+                  ? Palette.gold.withValues(alpha: 0.18)
+                  : Palette.slotFill.withValues(alpha: 0.75),
+              border: Border.all(
+                color: highlight
+                    ? accent.withValues(alpha: enabled ? 0.95 : 0.4)
+                    : Palette.panelEdge,
+                width: highlight ? 1.6 : 1,
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CustomPaint(
+                    painter: _ItemGlyphPainter(
+                      kind: kind,
+                      color: enabled
+                          ? Palette.textPrimary
+                          : Palette.textDim.withValues(alpha: 0.45),
+                    ),
+                  ),
+                ),
+                if (!tight) ...[
+                  const SizedBox(width: 5),
+                  Text(
+                    kind.label,
+                    style: AppText.label.copyWith(
+                      fontSize: 11,
+                      color: enabled
+                          ? Palette.textPrimary
+                          : Palette.textDim.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ],
+                const SizedBox(width: 5),
+                Text(
+                  'x$count',
+                  style: AppText.number.copyWith(
+                    fontSize: 12,
+                    color: enabled
+                        ? Palette.gold
+                        : Palette.textDim.withValues(alpha: 0.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1073,7 +1483,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         final hpText = switch ((tight, hasShield)) {
           (true, true) => '${battle.playerHp}+${battle.shield}',
           (true, false) => '${battle.playerHp}',
-          (false, true) => '${battle.playerHp}/${profile.maxHp}+${battle.shield}',
+          (false, true) =>
+            '${battle.playerHp}/${profile.maxHp}+${battle.shield}',
           (false, false) => '${battle.playerHp}/${profile.maxHp}',
         };
         return Container(
@@ -1095,26 +1506,35 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                       value: battle.playerHpRatio,
                       // 护盾直接画在血条上（叠加段），省掉一个独立标签的位置，
                       // 小屏上才放得下"提示"按钮。
-                      shieldValue: hasShield ? battle.shield / profile.maxShield : 0,
+                      shieldValue: hasShield
+                          ? battle.shield / profile.maxShield
+                          : 0,
                       color: Palette.hpPlayer,
                       leading: '生命',
                       trailing: hpText,
                       height: 14,
-                      semanticLabel: '生命 ${battle.playerHp} / ${profile.maxHp}'
+                      semanticLabel:
+                          '生命 ${battle.playerHp} / ${profile.maxHp}'
                           '${hasShield ? '，护盾 ${battle.shield}' : ''}',
                     ),
                     const SizedBox(height: 6),
                     EnergyBar(
                       // 分母用实际消耗：拿到「月华」之后 60 点怒气就能放必杀，
                       // 进度条与文案也要跟着变，否则玩家看不出这张牌在起作用。
-                      value: (battle.rage / battle.ultimateCost).clamp(0.0, 1.0),
+                      value: (battle.rage / battle.ultimateCost).clamp(
+                        0.0,
+                        1.0,
+                      ),
                       color: Palette.rage,
                       leading: '怒气',
                       trailing: battle.rageReady
                           ? '就绪'
-                          : (tight ? '${battle.rage}' : '${battle.rage}/${battle.ultimateCost}'),
+                          : (tight
+                                ? '${battle.rage}'
+                                : '${battle.rage}/${battle.ultimateCost}'),
                       height: 10,
-                      semanticLabel: '怒气 ${battle.rage} / ${battle.ultimateCost}',
+                      semanticLabel:
+                          '怒气 ${battle.rage} / ${battle.ultimateCost}',
                     ),
                   ],
                 ),
@@ -1160,8 +1580,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                 hint: _aimingUltimate
                     ? '点击棋盘落点'
                     : (battle.rageReady
-                        ? '自选落点'
-                        : '怒气 ${battle.rage}/${battle.ultimateCost}'),
+                          ? '自选落点'
+                          : '怒气 ${battle.rage}/${battle.ultimateCost}'),
                 enabled: battle.rageReady && !_busy && !battle.isOver,
                 color: _aimingUltimate ? Palette.danger : Palette.rage,
                 onTap: _armUltimate,
@@ -1225,14 +1645,18 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
               ),
               child: Container(
                 margin: const EdgeInsets.symmetric(horizontal: 34),
-                padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 26),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 26,
+                  vertical: 26,
+                ),
                 decoration: BoxDecoration(
                   color: Palette.panel.withValues(alpha: 0.94),
                   borderRadius: BorderRadius.circular(22),
                   border: Border.all(color: Palette.panelEdge),
                   boxShadow: [
                     BoxShadow(
-                      color: Color(level.enemy.themeColor).withValues(alpha: 0.28),
+                      color: Color(level.enemy.themeColor)
+                          .withValues(alpha: 0.28),
                       blurRadius: 40,
                       spreadRadius: 2,
                     ),
@@ -1258,12 +1682,17 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 22),
-                    Text('回合 ${level.enemy.turnsPerAttack} · 出手 ${level.enemy.attack}',
-                        style: AppText.label),
+                    Text(
+                      '回合 ${level.enemy.turnsPerAttack} · 出手 ${level.enemy.attack}',
+                      style: AppText.label,
+                    ),
                     const SizedBox(height: 14),
                     Text(
                       '点击任意处开始',
-                      style: AppText.label.copyWith(fontSize: 11, color: Palette.gold.withValues(alpha: 0.8)),
+                      style: AppText.label.copyWith(
+                        fontSize: 11,
+                        color: Palette.gold.withValues(alpha: 0.8),
+                      ),
                     ),
                   ],
                 ),
@@ -1281,11 +1710,14 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       currentLevel: _levelIndex,
       taken: Map.of(_taken),
       showLevelSelect: widget.mode == GameMode.campaign,
-      modeLabel: widget.mode == GameMode.campaign ? '战役' : '无尽 · 第 ${_levelIndex + 1} 波',
+      modeLabel: widget.mode == GameMode.campaign
+          ? '战役'
+          : '无尽 · 第 ${_levelIndex + 1} 波',
       // 无尽模式里没有「关」：同一个按钮要说成「从第 1 波重来」。
       restartLabel: widget.mode == GameMode.campaign
           ? (_taken.isEmpty ? '回到第一关' : '重开一局（清空强化）')
           : '从第 1 波重来',
+      restartLevelLabel: widget.mode == GameMode.campaign ? '重开本关' : '重开本波',
       onResume: () => setState(() {
         _showMenu = false;
         // 从结算面板点"关卡选择"再关掉菜单时要回到结算：这一局已经结束
@@ -1319,8 +1751,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     final lastLevel = !endless && _levelIndex >= Campaign.levels.length - 1;
     // 三选一是肉鸽的招牌时刻：小屏上把标题与间距收紧一档，让三张牌
     // 一屏全见，而不是要滚动才能看到第三张。没有牌可选的结算不受影响。
-    final tightOffer = _offer.isNotEmpty &&
-        MediaQuery.sizeOf(context).width < 380;
+    final tightOffer =
+        _offer.isNotEmpty && MediaQuery.sizeOf(context).width < 380;
     return Positioned.fill(
       child: Container(
         color: Colors.black.withValues(alpha: 0.84),
@@ -1334,7 +1766,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
               border: Border.all(color: Palette.panelEdge),
               boxShadow: [
                 BoxShadow(
-                  color: (won ? Palette.gold : Palette.danger).withValues(alpha: 0.18),
+                  color: (won ? Palette.gold : Palette.danger).withValues(
+                    alpha: 0.18,
+                  ),
                   blurRadius: 40,
                   spreadRadius: 2,
                 ),
@@ -1349,7 +1783,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    won ? (_campaignClear ? '通关' : '胜利') : (endless ? '终局' : '败北'),
+                    won
+                        ? (_campaignClear ? '通关' : '胜利')
+                        : (endless ? '终局' : '败北'),
                     style: AppText.title.copyWith(
                       fontSize: tightOffer ? 34 : 44,
                       color: won ? Palette.gold : Palette.danger,
@@ -1362,12 +1798,14 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                   Text(
                     won
                         ? (_campaignClear
-                            ? '你击碎了最后的黑'
-                            : endless
-                                ? '${level.enemy.name} 已被击退'
-                                : '${level.enemy.name} 已被击败')
+                              ? '你击碎了最后的黑'
+                              : endless
+                              ? '${level.enemy.name} 已被击退'
+                              : '${level.enemy.name} 已被击败')
                         : (endless ? '倒在第 ${_levelIndex + 1} 波' : '再来一次'),
-                    style: AppText.label.copyWith(fontSize: tightOffer ? 12 : 13),
+                    style: AppText.label.copyWith(
+                      fontSize: tightOffer ? 12 : 13,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   SizedBox(height: tightOffer ? 10 : 22),
@@ -1415,27 +1853,36 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                       runSpacing: 10,
                       children: [
                         if (won && lastLevel)
-                          _primaryButton('重新开始', () => _restartCampaign()),
+                          _primaryButton('重新开始', _restartCampaign),
                         // 无尽模式连强化池都叠满了，这一波之后没有牌可发——
                         // 但路必须留着，否则玩家只能退到主菜单重打当前波。
                         if (won && endless && _offer.isEmpty)
-                          _primaryButton('继续下一波', () => _startLevel(_levelIndex + 1)),
+                          _primaryButton(
+                            '继续下一波',
+                            () => _startLevel(_levelIndex + 1),
+                          ),
                         if (!won && endless) ...[
-                          _primaryButton('再来一局', () => _restartCampaign()),
+                          _primaryButton('再来一局', _restartCampaign),
                         ],
                         if (!won && !endless) ...[
-                          _primaryButton('重试本关', () => _startLevel(_levelIndex)),
-                          _ghostButton('回到第一关', () => _restartCampaign()),
+                          _primaryButton(
+                            '重试本关',
+                            () => _startLevel(_levelIndex),
+                          ),
+                          _ghostButton('回到第一关', _restartCampaign),
                         ],
                         // 空断言在这里会炸：预览 / 测试里的 GameScreen 是根
                         // 页面，本来就没有"回到主菜单"这个去处。
                         if (widget.onExitToMenu != null)
                           _ghostButton('回到主菜单', widget.onExitToMenu!),
                         if (!endless)
-                          _ghostButton('关卡选择', () => setState(() {
-                            _showResult = false;
-                            _showMenu = true;
-                          })),
+                          _ghostButton(
+                            '关卡选择',
+                            () => setState(() {
+                              _showResult = false;
+                              _showMenu = true;
+                            }),
+                          ),
                       ],
                     ),
                 ],
@@ -1548,7 +1995,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
               ),
               boxShadow: [
                 BoxShadow(
-                  color: color.withValues(alpha: legendary ? 0.42 : (rare ? 0.30 : 0.22)),
+                  color: color.withValues(
+                    alpha: legendary ? 0.42 : (rare ? 0.30 : 0.22),
+                  ),
                   blurRadius: legendary ? 22 : (rare ? 18 : 16),
                 ),
               ],
@@ -1593,7 +2042,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                             const SizedBox(width: 6),
                             Text(
                               '已有 x$stacks',
-                              style: AppText.label.copyWith(fontSize: 10, color: color),
+                              style: AppText.label.copyWith(
+                                fontSize: 10,
+                                color: color,
+                              ),
                             ),
                           ],
                         ],
@@ -1626,7 +2078,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                                 height: 1.3,
                                 color: upgrade.isCostly
                                     ? const Color(0xFFFF8095)
-                                    : Palette.textPrimary.withValues(alpha: 0.82),
+                                    : Palette.textPrimary.withValues(
+                                        alpha: 0.82,
+                                      ),
                               ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
@@ -1638,7 +2092,11 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                   ),
                 ),
                 const SizedBox(width: 8),
-                Icon(Icons.chevron_right, size: 20, color: color.withValues(alpha: 0.8)),
+                Icon(
+                  Icons.chevron_right,
+                  size: 20,
+                  color: color.withValues(alpha: 0.8),
+                ),
               ],
             ),
           ),
@@ -1673,7 +2131,11 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         children: [
           SizedBox(
             width: 88,
-            child: Text(label, style: AppText.label, textAlign: TextAlign.right),
+            child: Text(
+              label,
+              style: AppText.label,
+              textAlign: TextAlign.right,
+            ),
           ),
           const SizedBox(width: 14),
           SizedBox(
@@ -1695,9 +2157,14 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 13),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(14),
-          gradient: const LinearGradient(colors: [Palette.gold, Color(0xFFC98A33)]),
+          gradient: const LinearGradient(
+            colors: [Palette.gold, Color(0xFFC98A33)],
+          ),
           boxShadow: [
-            BoxShadow(color: Palette.gold.withValues(alpha: 0.45), blurRadius: 18),
+            BoxShadow(
+              color: Palette.gold.withValues(alpha: 0.45),
+              blurRadius: 18,
+            ),
           ],
         ),
         child: Text(
@@ -1720,7 +2187,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: Palette.panelEdge),
         ),
-        child: Text(label, style: AppText.button.copyWith(color: Palette.textDim)),
+        child: Text(
+          label,
+          style: AppText.button.copyWith(color: Palette.textDim),
+        ),
       ),
     );
   }
@@ -1747,6 +2217,23 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       ),
     );
   }
+}
+
+/// 道具栏上的图标。绘制逻辑在 [ItemArt] 里，这里只做一层画家适配。
+class _ItemGlyphPainter extends CustomPainter {
+  final ItemKind kind;
+  final Color color;
+
+  const _ItemGlyphPainter({required this.kind, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    ItemArt.paint(canvas, Offset.zero & size, kind, color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ItemGlyphPainter old) =>
+      old.kind != kind || old.color != color;
 }
 
 /// 强化卡片上的图标。绘制逻辑在 [UpgradeArt] 里，这里只做一层画家适配。
@@ -1781,4 +2268,3 @@ class _ComboTier {
 
   const _ComboTier(this.text, this.color, this.size, this.shake);
 }
-

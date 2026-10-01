@@ -126,8 +126,7 @@ class UpgradeArt {
       UpgradeIcon.shield ||
       UpgradeIcon.cross ||
       UpgradeIcon.bolt ||
-      UpgradeIcon.skull =>
-        _star(),
+      UpgradeIcon.skull => _star(),
     };
   }
 
@@ -155,10 +154,12 @@ class UpgradeArt {
     for (var i = 0; i < 3; i++) {
       final a = -math.pi / 2 + i * math.pi * 2 / 3;
       final c = Offset(0.5 + math.cos(a) * 0.28, 0.5 + math.sin(a) * 0.28);
-      p.addRRect(RRect.fromRectAndRadius(
-        Rect.fromCenter(center: c, width: 0.30, height: 0.30),
-        const Radius.circular(0.09),
-      ));
+      p.addRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(center: c, width: 0.30, height: 0.30),
+          const Radius.circular(0.09),
+        ),
+      );
     }
     // 中间的实心菱形把三个环串起来
     p.addPath(
@@ -188,7 +189,9 @@ class UpgradeArt {
     final outer = Path()
       ..addOval(Rect.fromCircle(center: const Offset(0.5, 0.5), radius: 0.46));
     final inner = Path()
-      ..addOval(Rect.fromCircle(center: const Offset(0.70, 0.42), radius: 0.42));
+      ..addOval(
+        Rect.fromCircle(center: const Offset(0.70, 0.42), radius: 0.42),
+      );
     return Path.combine(PathOperation.difference, outer, inner);
   }
 
@@ -236,10 +239,12 @@ class UpgradeArt {
     for (var i = 0; i < teeth; i++) {
       final a = i * math.pi * 2 / teeth;
       final c = Offset(0.5 + math.cos(a) * 0.42, 0.5 + math.sin(a) * 0.42);
-      p.addRRect(RRect.fromRectAndRadius(
-        Rect.fromCenter(center: c, width: 0.20, height: 0.20),
-        const Radius.circular(0.05),
-      ));
+      p.addRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(center: c, width: 0.20, height: 0.20),
+          const Radius.circular(0.05),
+        ),
+      );
     }
     p.addOval(Rect.fromCircle(center: const Offset(0.5, 0.5), radius: 0.13));
     return p;
@@ -249,19 +254,29 @@ class UpgradeArt {
   static Path _trident() {
     final p = Path();
     for (final dx in [-0.26, 0.0, 0.26]) {
-      p.addRRect(RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(0.5 + dx, 0.34), width: 0.10, height: 0.56),
-        const Radius.circular(0.04),
-      ));
+      p.addRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(0.5 + dx, 0.34),
+            width: 0.10,
+            height: 0.56,
+          ),
+          const Radius.circular(0.04),
+        ),
+      );
     }
-    p.addRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTRB(0.18, 0.50, 0.82, 0.60),
-      const Radius.circular(0.04),
-    ));
-    p.addRRect(RRect.fromRectAndRadius(
-      const Rect.fromLTRB(0.44, 0.58, 0.56, 0.94),
-      const Radius.circular(0.04),
-    ));
+    p.addRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTRB(0.18, 0.50, 0.82, 0.60),
+        const Radius.circular(0.04),
+      ),
+    );
+    p.addRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTRB(0.44, 0.58, 0.56, 0.94),
+        const Radius.circular(0.04),
+      ),
+    );
     return p;
   }
 
@@ -271,10 +286,18 @@ class UpgradeArt {
     const arm = 0.10; // 线宽的一半
     const reach = 0.46;
     const gap = 0.16; // 中心留空的半径
-    p.addRect(const Rect.fromLTRB(0.5 - arm, 0.5 - reach, 0.5 + arm, 0.5 - gap));
-    p.addRect(const Rect.fromLTRB(0.5 - arm, 0.5 + gap, 0.5 + arm, 0.5 + reach));
-    p.addRect(const Rect.fromLTRB(0.5 - reach, 0.5 - arm, 0.5 - gap, 0.5 + arm));
-    p.addRect(const Rect.fromLTRB(0.5 + gap, 0.5 - arm, 0.5 + reach, 0.5 + arm));
+    p.addRect(
+      const Rect.fromLTRB(0.5 - arm, 0.5 - reach, 0.5 + arm, 0.5 - gap),
+    );
+    p.addRect(
+      const Rect.fromLTRB(0.5 - arm, 0.5 + gap, 0.5 + arm, 0.5 + reach),
+    );
+    p.addRect(
+      const Rect.fromLTRB(0.5 - reach, 0.5 - arm, 0.5 - gap, 0.5 + arm),
+    );
+    p.addRect(
+      const Rect.fromLTRB(0.5 + gap, 0.5 - arm, 0.5 + reach, 0.5 + arm),
+    );
     p.addOval(Rect.fromCircle(center: const Offset(0.5, 0.5), radius: 0.09));
     return p;
   }

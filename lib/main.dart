@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,11 +11,16 @@ import 'ui/sfx.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // 竖屏单手游玩：锁定竖屏并进入沉浸式全屏。
-  SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  //
+  // 刻意不 await：平台通道偶尔失败（模拟器、桌面调试环境）不该拦下启动，
+  // 用 unawaited 明确交代"这是有意放手的"，而不是漏写。
+  unawaited(
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]),
+  );
+  unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky));
 
   // 设置与音效都先加载好再进游戏：首帧就能读到存档，音效也不会缺头几秒。
   final settings = AppSettings();
@@ -49,10 +56,8 @@ class GemBattleApp extends StatelessWidget {
       ),
       // 游戏里的棋盘是固定比例的几何布局，字号无上限地放大会直接把 HUD 撑破；
       // 限幅到 1.3 倍，既照顾了"我就想字大一点"的需求，也不会破坏排版。
-      builder: (context, child) => MediaQuery.withClampedTextScaling(
-        maxScaleFactor: 1.3,
-        child: child!,
-      ),
+      builder: (context, child) =>
+          MediaQuery.withClampedTextScaling(maxScaleFactor: 1.3, child: child!),
       home: MainMenuScreen(settings: settings, sfx: sfx),
     );
   }

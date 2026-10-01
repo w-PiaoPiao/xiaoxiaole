@@ -52,8 +52,13 @@ void main() {
                             danger: t == 1,
                           ),
                           const SizedBox(width: 10),
-                          Text('turnsToAttack=$t',
-                              style: const TextStyle(color: Colors.white, fontSize: 14)),
+                          Text(
+                            'turnsToAttack=$t',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -66,7 +71,8 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 200));
 
-    final boundary = key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final boundary =
+        key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
     await tester.runAsync(() async {
       final image = await boundary.toImage();
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);

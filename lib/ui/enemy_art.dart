@@ -63,6 +63,10 @@ class _SilhouetteKey {
   final bool enraged;
   final EnemyArchetype archetype;
 
+  /// 白闪的量化档位（0~10）。白闪是逐帧衰减的，但量化到十档之后肉眼
+  /// 分辨不出与连续淡出的差别——换来的是命中期间不再逐帧重建整幅剪影。
+  final int flashStep;
+
   const _SilhouetteKey(
     this.t,
     this.w,
@@ -71,6 +75,7 @@ class _SilhouetteKey {
     this.phase,
     this.enraged,
     this.archetype,
+    this.flashStep,
   );
 
   @override
@@ -82,7 +87,8 @@ class _SilhouetteKey {
       other.theme == theme &&
       other.phase == phase &&
       other.enraged == enraged &&
-      other.archetype == archetype;
+      other.archetype == archetype &&
+      other.flashStep == flashStep;
 
   @override
   int get hashCode => Object.hash(t, w, h, theme, phase, enraged, archetype);
@@ -134,8 +140,11 @@ class EnemyArt {
 
     // 剪影本身是低频摆动（约 0.15~0.2 Hz），把它按 1/8 秒量化后录成 Picture
     // 复用，省掉每帧重建五个复杂 Path 与二十来个渐变着色器的开销。
-    // 受击白闪与消散粒子是逐帧变化的，这两种状态下直接实时绘制。
-    final canCache = pose.hitFlash <= 0.01 && pose.dissolve <= 0.01;
+    //
+    // 受击白闪也进缓存键（量化成十档）：白闪要持续约 0.38 秒，逐帧实时绘制
+    // 就是二十多帧的全量重建；量化之后最多重建十次，肉眼分辨不出差别。
+    // 消散（战败）每局只播一次，仍走实时路径——它还要配合整幅淡出。
+    final canCache = pose.dissolve <= 0.01;
 
     // 消散（战败）：整幅剪影一起淡出。
     //
@@ -148,7 +157,9 @@ class EnemyArt {
       canvas.saveLayer(
         Rect.fromLTWH(-w, -h * 0.4, w * 2, h * 1.8),
         Paint()
-          ..color = Colors.white.withValues(alpha: (1 - pose.dissolve).clamp(0.0, 1.0)),
+          ..color = Colors.white.withValues(
+            alpha: (1 - pose.dissolve).clamp(0.0, 1.0),
+          ),
       );
     }
 
@@ -180,8 +191,19 @@ class EnemyArt {
     EnemyPose pose,
     EnemyArchetype archetype,
   ) {
-    final key = _SilhouetteKey(_quantize(t), w, h, theme, pose.phase, pose.enraged, archetype);
-    if (_cachedKey == key && _cachedSilhouette != null) return _cachedSilhouette!;
+    final key = _SilhouetteKey(
+      _quantize(t),
+      w,
+      h,
+      theme,
+      pose.phase,
+      pose.enraged,
+      archetype,
+      (pose.hitFlash.clamp(0.0, 1.0) * 10).round(),
+    );
+    if (_cachedKey == key && _cachedSilhouette != null) {
+      return _cachedSilhouette!;
+    }
     _cachedSilhouette?.dispose();
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
@@ -234,8 +256,15 @@ class EnemyArt {
     EnemyArchetype archetype,
   ) {
     if (archetype == EnemyArchetype.enchantress) {
-      _fill(canvas, _buildTendrils(w, h, t, pose), theme, pose, 0.55,
-          const Color(0xFF2A0F1E), const Color(0xFF0D0410));
+      _fill(
+        canvas,
+        _buildTendrils(w, h, t, pose),
+        theme,
+        pose,
+        0.55,
+        const Color(0xFF2A0F1E),
+        const Color(0xFF0D0410),
+      );
     }
     final hair = _buildHair(w, h, t, pose, back: true);
     final body = _buildBody(w, h, t, pose);
@@ -243,13 +272,53 @@ class EnemyArt {
     final frontHair = _buildFrontHair(w, h, t, pose);
     final horns = _buildHorns(w, h, t);
 
-    _fill(canvas, hair, theme, pose, 0.62, const Color(0xFF1B1030), const Color(0xFF0A0514));
-    _fill(canvas, body, theme, pose, 1.0, const Color(0xFF4E3580), const Color(0xFF180E2C));
+    _fill(
+      canvas,
+      hair,
+      theme,
+      pose,
+      0.62,
+      const Color(0xFF1B1030),
+      const Color(0xFF0A0514),
+    );
+    _fill(
+      canvas,
+      body,
+      theme,
+      pose,
+      1.0,
+      const Color(0xFF4E3580),
+      const Color(0xFF180E2C),
+    );
     _paintDressShading(canvas, w, h, theme, pose);
-    _fill(canvas, arms, theme, pose, 0.96, const Color(0xFF33204F), const Color(0xFF150C28));
+    _fill(
+      canvas,
+      arms,
+      theme,
+      pose,
+      0.96,
+      const Color(0xFF33204F),
+      const Color(0xFF150C28),
+    );
     _paintChestGem(canvas, w, h, theme, pose);
-    _fill(canvas, horns, theme, pose, 0.9, const Color(0xFF33204F), const Color(0xFF120A22));
-    _fill(canvas, frontHair, theme, pose, 0.88, const Color(0xFF1D1132), const Color(0xFF0A0516));
+    _fill(
+      canvas,
+      horns,
+      theme,
+      pose,
+      0.9,
+      const Color(0xFF33204F),
+      const Color(0xFF120A22),
+    );
+    _fill(
+      canvas,
+      frontHair,
+      theme,
+      pose,
+      0.88,
+      const Color(0xFF1D1132),
+      const Color(0xFF0A0516),
+    );
 
     _paintFace(canvas, w, h, theme, pose, t);
     _paintCracks(canvas, w, h, pose);
@@ -275,7 +344,12 @@ class EnemyArt {
             w * 0.20 * side,
             h * 0.26,
           )
-          ..quadraticBezierTo(w * 0.15 * side, h * 0.32, w * 0.09 * side, h * 0.34)
+          ..quadraticBezierTo(
+            w * 0.15 * side,
+            h * 0.32,
+            w * 0.09 * side,
+            h * 0.34,
+          )
           ..close(),
         Offset.zero,
       );
@@ -307,9 +381,22 @@ class EnemyArt {
       ..quadraticBezierTo(0, h * 0.94, -w * 0.06, h * 0.86)
       ..quadraticBezierTo(-w * 0.13, h * 0.92, -w * 0.20, h * 0.86)
       ..quadraticBezierTo(-w * 0.36, h * 0.74, -w * 0.34, h * 0.50)
-      ..quadraticBezierTo(-w * 0.30, h * 0.22, 0, h * (0.06 + flicker / h) + lean)
+      ..quadraticBezierTo(
+        -w * 0.30,
+        h * 0.22,
+        0,
+        h * (0.06 + flicker / h) + lean,
+      )
       ..close();
-    _fill(canvas, flame, theme, pose, 0.9, const Color(0xFF2E6E68), const Color(0xFF0E2724));
+    _fill(
+      canvas,
+      flame,
+      theme,
+      pose,
+      0.9,
+      const Color(0xFF2E6E68),
+      const Color(0xFF0E2724),
+    );
 
     // 焰心：一道竖向亮带，是整个身体的"光源"。
     final core = Path()
@@ -361,7 +448,9 @@ class EnemyArt {
       final x = (i - 1) * w * 0.12;
       mist
         ..strokeWidth = w * (0.030 - i * 0.006)
-        ..color = theme.withValues(alpha: (0.30 - i * 0.07) * (1 - pose.dissolve));
+        ..color = theme.withValues(
+          alpha: (0.30 - i * 0.07) * (1 - pose.dissolve),
+        );
       canvas.drawPath(
         Path()
           ..moveTo(x, h * 0.87)
@@ -398,7 +487,15 @@ class EnemyArt {
         ..lineTo(w * (0.28 + i * 0.05) * side, h * 0.93 + bob)
         ..lineTo(w * (0.22 + i * 0.05) * side, h * 0.97 + bob)
         ..close();
-      _fill(canvas, rock, theme, pose, 0.5, const Color(0xFF5C4A22), const Color(0xFF241C0C));
+      _fill(
+        canvas,
+        rock,
+        theme,
+        pose,
+        0.5,
+        const Color(0xFF5C4A22),
+        const Color(0xFF241C0C),
+      );
     }
 
     // 巨盾：举在身前（画面右侧）的圆形塔盾，带一圈铆钉环。
@@ -434,7 +531,10 @@ class EnemyArt {
     for (var i = 0; i < 8; i++) {
       final a = math.pi * 2 / 8 * i + t * 0.15;
       canvas.drawCircle(
-        shieldC.translate(shieldR * 0.82 * math.cos(a), shieldR * 0.82 * math.sin(a)),
+        shieldC.translate(
+          shieldR * 0.82 * math.cos(a),
+          shieldR * 0.82 * math.sin(a),
+        ),
         w * 0.011,
         Paint()..color = theme.withValues(alpha: 0.8 * (1 - pose.dissolve)),
       );
@@ -462,17 +562,48 @@ class EnemyArt {
       ..quadraticBezierTo(w * 0.22, h * 0.245, 0, h * 0.25)
       ..quadraticBezierTo(-w * 0.22, h * 0.245, -w * 0.30, h * 0.30)
       ..close();
-    _fill(canvas, body, theme, pose, 1.0, const Color(0xFF7A6230), const Color(0xFF241A0A));
+    _fill(
+      canvas,
+      body,
+      theme,
+      pose,
+      1.0,
+      const Color(0xFF7A6230),
+      const Color(0xFF241A0A),
+    );
 
     // 双肩甲块
     for (final side in [-1.0, 1.0]) {
       final pad = Path()
         ..moveTo(w * 0.24 * side, h * 0.26)
-        ..quadraticBezierTo(w * 0.40 * side, h * 0.27, w * 0.42 * side, h * 0.36)
-        ..quadraticBezierTo(w * 0.40 * side, h * 0.44, w * 0.30 * side, h * 0.44)
-        ..quadraticBezierTo(w * 0.22 * side, h * 0.40, w * 0.24 * side, h * 0.26)
+        ..quadraticBezierTo(
+          w * 0.40 * side,
+          h * 0.27,
+          w * 0.42 * side,
+          h * 0.36,
+        )
+        ..quadraticBezierTo(
+          w * 0.40 * side,
+          h * 0.44,
+          w * 0.30 * side,
+          h * 0.44,
+        )
+        ..quadraticBezierTo(
+          w * 0.22 * side,
+          h * 0.40,
+          w * 0.24 * side,
+          h * 0.26,
+        )
         ..close();
-      _fill(canvas, pad, theme, pose, 0.95, const Color(0xFF8A7038), const Color(0xFF2C2008));
+      _fill(
+        canvas,
+        pad,
+        theme,
+        pose,
+        0.95,
+        const Color(0xFF8A7038),
+        const Color(0xFF2C2008),
+      );
     }
 
     // 甲片缝：三道横缝让石甲有"块"的读感。
@@ -482,11 +613,7 @@ class EnemyArt {
       ..color = Colors.black.withValues(alpha: 0.30);
     for (final y in [0.40, 0.54, 0.68]) {
       final width = w * (0.30 - (y - 0.40) * 0.22);
-      canvas.drawLine(
-        Offset(-width, h * y),
-        Offset(width, h * y),
-        seam,
-      );
+      canvas.drawLine(Offset(-width, h * y), Offset(width, h * y), seam);
     }
 
     // 头盔：矮方盔 + 一道横向发光缝眼。
@@ -496,7 +623,15 @@ class EnemyArt {
       ..quadraticBezierTo(0, h * 0.095, w * 0.12, h * 0.14)
       ..lineTo(w * 0.11, h * 0.245)
       ..close();
-    _fill(canvas, helm, theme, pose, 0.98, const Color(0xFF8A7038), const Color(0xFF2C2008));
+    _fill(
+      canvas,
+      helm,
+      theme,
+      pose,
+      0.98,
+      const Color(0xFF8A7038),
+      const Color(0xFF2C2008),
+    );
     // 盔顶脊线
     canvas.drawLine(
       Offset(0, h * 0.10),
@@ -561,7 +696,12 @@ class EnemyArt {
             w * 0.03 * side + flutter * 0.5,
             h * 0.58,
           )
-          ..quadraticBezierTo(w * 0.08 * side, h * 0.42, w * 0.02 * side, h * 0.31)
+          ..quadraticBezierTo(
+            w * 0.08 * side,
+            h * 0.42,
+            w * 0.02 * side,
+            h * 0.31,
+          )
           ..close(),
         theme,
         pose,
@@ -585,7 +725,15 @@ class EnemyArt {
       ..quadraticBezierTo(w * 0.20, h * 0.45, w * 0.10, h * 0.28)
       ..quadraticBezierTo(0, h * 0.245, -w * 0.10, h * 0.28)
       ..close();
-    _fill(canvas, cloak, theme, pose, 1.0, const Color(0xFF2E2150), const Color(0xFF0E0820));
+    _fill(
+      canvas,
+      cloak,
+      theme,
+      pose,
+      1.0,
+      const Color(0xFF2E2150),
+      const Color(0xFF0E0820),
+    );
 
     // 兜帽头：上尖的帽形，帽檐里是纯黑的空洞。
     final hood = Path()
@@ -595,10 +743,22 @@ class EnemyArt {
       ..quadraticBezierTo(-w * 0.06, h * 0.27, -w * 0.105, h * 0.235)
       ..quadraticBezierTo(-w * 0.12, h * 0.115, 0, h * 0.075)
       ..close();
-    _fill(canvas, hood, theme, pose, 0.95, const Color(0xFF241840), const Color(0xFF0A0518));
+    _fill(
+      canvas,
+      hood,
+      theme,
+      pose,
+      0.95,
+      const Color(0xFF241840),
+      const Color(0xFF0A0518),
+    );
     // 帽内阴影
     canvas.drawOval(
-      Rect.fromCenter(center: Offset(0, h * 0.215), width: w * 0.145, height: h * 0.075),
+      Rect.fromCenter(
+        center: Offset(0, h * 0.215),
+        width: w * 0.145,
+        height: h * 0.075,
+      ),
       Paint()..color = const Color(0xFF050310).withValues(alpha: 0.9),
     );
 
@@ -606,7 +766,10 @@ class EnemyArt {
     final blink = math.sin(t * 0.85) > 0.965 ? 0.12 : 1.0;
     final eye = Offset(w * 0.030, h * 0.212);
     // 亮度上限 1.0：相位与狂暴叠加后原本会算出 1.5 这种越界的 alpha。
-    final eyeGlow = (0.8 + pose.phase * 0.1 + (pose.enraged ? 0.3 : 0.0)).clamp(0.0, 1.0);
+    final eyeGlow = (0.8 + pose.phase * 0.1 + (pose.enraged ? 0.3 : 0.0)).clamp(
+      0.0,
+      1.0,
+    );
     canvas.drawOval(
       Rect.fromCenter(center: eye, width: w * 0.040, height: h * 0.020 * blink),
       Paint()
@@ -666,11 +829,15 @@ class EnemyArt {
     for (var i = 0; i < 7; i++) {
       final a = t * (0.22 + 0.03 * i) + i * 0.9;
       final rr = w * (0.42 + 0.04 * (i % 3));
-      final p = Offset(rr * math.cos(a), h * 0.42 + h * 0.16 * math.sin(a * 1.4));
+      final p = Offset(
+        rr * math.cos(a),
+        h * 0.42 + h * 0.16 * math.sin(a * 1.4),
+      );
       canvas.drawCircle(
         p,
         w * (0.005 + 0.003 * (i % 2)),
-        Paint()..color = Colors.white.withValues(alpha: 0.35 * (1 - pose.dissolve)),
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.35 * (1 - pose.dissolve)),
       );
     }
 
@@ -688,7 +855,15 @@ class EnemyArt {
       ..quadraticBezierTo(w * 0.34, h * 0.36, w * 0.13, h * 0.24)
       ..quadraticBezierTo(0, h * 0.20, -w * 0.13, h * 0.24)
       ..close();
-    _fill(canvas, cape, theme, pose, 1.0, const Color(0xFF3A1A55), const Color(0xFF0A0414));
+    _fill(
+      canvas,
+      cape,
+      theme,
+      pose,
+      1.0,
+      const Color(0xFF3A1A55),
+      const Color(0xFF0A0414),
+    );
 
     // 斗篷内侧：比外层更深的内衬，拉开层次。
     final inner = Path()
@@ -708,7 +883,15 @@ class EnemyArt {
       ..quadraticBezierTo(-w * 0.115, h * 0.13, 0, h * 0.105)
       ..quadraticBezierTo(w * 0.115, h * 0.13, w * 0.105, h * 0.245)
       ..close();
-    _fill(canvas, head, theme, pose, 0.95, const Color(0xFF2A1040), const Color(0xFF0A0414));
+    _fill(
+      canvas,
+      head,
+      theme,
+      pose,
+      0.95,
+      const Color(0xFF2A1040),
+      const Color(0xFF0A0414),
+    );
 
     // 月牙双角：从头顶两侧向内弯——终焉的标志。
     for (final side in [-1.0, 1.0]) {
@@ -729,7 +912,12 @@ class EnemyArt {
             w * 0.09 * side,
             h * 0.088,
           )
-          ..quadraticBezierTo(w * 0.055 * side, h * 0.115, w * 0.075 * side, h * 0.135)
+          ..quadraticBezierTo(
+            w * 0.055 * side,
+            h * 0.115,
+            w * 0.075 * side,
+            h * 0.135,
+          )
           ..close(),
         theme,
         pose,
@@ -741,7 +929,8 @@ class EnemyArt {
 
     // 三只眼：横排的细长发光缝，狂暴时更亮。
     final blink = math.sin(t * 0.85) > 0.965 ? 0.12 : 1.0;
-    final eyeGlow = (0.75 + pose.phase * 0.12 + (pose.enraged ? 0.4 : 0.0)).clamp(0.0, 1.0);
+    final eyeGlow = (0.75 + pose.phase * 0.12 + (pose.enraged ? 0.4 : 0.0))
+        .clamp(0.0, 1.0);
     for (final dx in [-0.055, 0.0, 0.055]) {
       final p = Offset(w * dx, h * 0.175 + w * (dx.abs()) * 0.06);
       final ew = dx == 0 ? w * 0.052 : w * 0.038;
@@ -772,8 +961,11 @@ class EnemyArt {
     final arc = Paint()
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
-      ..color = Color.lerp(theme, Colors.white, 0.3)!.withValues(
-          alpha: 0.75 * (1 - pose.dissolve));
+      ..color = Color.lerp(
+        theme,
+        Colors.white,
+        0.3,
+      )!.withValues(alpha: 0.75 * (1 - pose.dissolve));
     for (var i = 0; i < 3; i++) {
       final r = vr * (0.45 + i * 0.30);
       final a0 = t * (0.9 - i * 0.25) + i * 2.1;
@@ -795,7 +987,12 @@ class EnemyArt {
 
   // ------------------------------------------------------------ 氛围
 
-  static void _paintAura(Canvas canvas, Size size, Color theme, EnemyPose pose) {
+  static void _paintAura(
+    Canvas canvas,
+    Size size,
+    Color theme,
+    EnemyPose pose,
+  ) {
     final intensity = 0.20 + pose.phase * 0.075 + (pose.enraged ? 0.16 : 0.0);
     final alpha = intensity * (1 - pose.dissolve);
     final center = Offset(size.width * 0.5, size.height * 0.55);
@@ -804,11 +1001,16 @@ class EnemyArt {
       center,
       radius,
       Paint()
-        ..shader = ui.Gradient.radial(center, radius, [
-          theme.withValues(alpha: alpha),
-          theme.withValues(alpha: alpha * 0.28),
-          Colors.transparent,
-        ], const [0.0, 0.42, 1.0]),
+        ..shader = ui.Gradient.radial(
+          center,
+          radius,
+          [
+            theme.withValues(alpha: alpha),
+            theme.withValues(alpha: alpha * 0.28),
+            Colors.transparent,
+          ],
+          const [0.0, 0.42, 1.0],
+        ),
     );
   }
 
@@ -918,7 +1120,10 @@ class EnemyArt {
         ..lineTo(0, s * 1.7)
         ..lineTo(-s * 0.8, 0)
         ..close();
-      canvas.drawPath(shard, Paint()..color = theme.withValues(alpha: 0.8 * (1 - pose.dissolve)));
+      canvas.drawPath(
+        shard,
+        Paint()..color = theme.withValues(alpha: 0.8 * (1 - pose.dissolve)),
+      );
       canvas.drawPath(
         shard,
         Paint()
@@ -947,7 +1152,10 @@ class EnemyArt {
     canvas.drawPath(
       path,
       Paint()
-        ..shader = ui.Gradient.linear(bounds.topCenter, bounds.bottomCenter, [top, bottom]),
+        ..shader = ui.Gradient.linear(bounds.topCenter, bounds.bottomCenter, [
+          top,
+          bottom,
+        ]),
     );
 
     // 主轮廓光：左上偏亮，右下渐隐，制造方向感
@@ -961,12 +1169,16 @@ class EnemyArt {
           bounds.topLeft,
           bounds.bottomRight,
           [
-            Color.lerp(theme, Colors.white, 0.45)!.withValues(alpha: 0.95 * layer),
+            Color.lerp(
+              theme,
+              Colors.white,
+              0.45,
+            )!.withValues(alpha: 0.95 * layer),
             theme.withValues(alpha: 0.55 * layer),
             theme.withValues(alpha: 0.06 * layer),
           ],
           const [0.0, 0.45, 1.0],
-        )
+        ),
     );
 
     // 内侧提亮，给剪影一点厚度
@@ -982,7 +1194,8 @@ class EnemyArt {
     if (pose.hitFlash > 0.01) {
       canvas.drawPath(
         path,
-        Paint()..color = Colors.white.withValues(alpha: pose.hitFlash * 0.6 * layer),
+        Paint()
+          ..color = Colors.white.withValues(alpha: pose.hitFlash * 0.6 * layer),
       );
     }
 
@@ -991,7 +1204,8 @@ class EnemyArt {
       for (var i = 0; i < 22; i++) {
         final p = Offset(
           bounds.left + rng.nextDouble() * bounds.width,
-          bounds.bottom - rng.nextDouble() * bounds.height * pose.dissolve * 1.5,
+          bounds.bottom -
+              rng.nextDouble() * bounds.height * pose.dissolve * 1.5,
         );
         canvas.drawCircle(
           p,
@@ -1014,9 +1228,24 @@ class EnemyArt {
       ..quadraticBezierTo(-w * 0.090, h * _hipY, -w * 0.230, h * 0.79)
       ..quadraticBezierTo(-w * 0.286, h * 0.855, -w * 0.268, h * _hemY)
       // 波浪裙摆
-      ..quadraticBezierTo(-w * 0.150, h * (0.862 + hemWave / h), -w * 0.075, h * 0.895)
-      ..quadraticBezierTo(-w * 0.010 + sway, h * (0.925 + hemWave / h), w * 0.078, h * 0.893)
-      ..quadraticBezierTo(w * 0.155, h * (0.860 - hemWave / h), w * 0.268, h * _hemY)
+      ..quadraticBezierTo(
+        -w * 0.150,
+        h * (0.862 + hemWave / h),
+        -w * 0.075,
+        h * 0.895,
+      )
+      ..quadraticBezierTo(
+        -w * 0.010 + sway,
+        h * (0.925 + hemWave / h),
+        w * 0.078,
+        h * 0.893,
+      )
+      ..quadraticBezierTo(
+        w * 0.155,
+        h * (0.860 - hemWave / h),
+        w * 0.268,
+        h * _hemY,
+      )
       ..quadraticBezierTo(w * 0.286, h * 0.855, w * 0.230, h * 0.79)
       ..quadraticBezierTo(w * 0.090, h * _hipY, w * 0.062, h * _waistY)
       ..quadraticBezierTo(w * 0.100, h * _bustY, w * 0.108, h * _shoulderY)
@@ -1027,12 +1256,13 @@ class EnemyArt {
 
     // 头部
     path.addPath(
-      Path()
-        ..addOval(Rect.fromCenter(
+      Path()..addOval(
+        Rect.fromCenter(
           center: Offset(sway * 0.5, h * (_headTop + _eyeY) / 2 + h * 0.012),
           width: w * 0.132,
           height: h * 0.155,
-        )),
+        ),
+      ),
       Offset.zero,
     );
 
@@ -1087,12 +1317,13 @@ class EnemyArt {
       );
       // 手
       path.addPath(
-        Path()
-          ..addOval(Rect.fromCenter(
+        Path()..addOval(
+          Rect.fromCenter(
             center: Offset(w * 0.124 * side + sway, h * 0.652),
             width: w * 0.032,
             height: h * 0.028,
-          )),
+          ),
+        ),
         Offset.zero,
       );
     }
@@ -1100,7 +1331,13 @@ class EnemyArt {
   }
 
   /// 身后的长发主体。
-  static Path _buildHair(double w, double h, double t, EnemyPose pose, {required bool back}) {
+  static Path _buildHair(
+    double w,
+    double h,
+    double t,
+    EnemyPose pose, {
+    required bool back,
+  }) {
     final flutter = 0.010 + pose.phase * 0.004;
     final path = Path();
     final spread = back ? 1.0 : 0.66;
@@ -1180,12 +1417,13 @@ class EnemyArt {
     }
     // 头顶发盖
     path.addPath(
-      Path()
-        ..addOval(Rect.fromCenter(
+      Path()..addOval(
+        Rect.fromCenter(
           center: Offset(0, h * 0.152),
           width: w * 0.152,
           height: h * 0.088,
-        )),
+        ),
+      ),
       Offset.zero,
     );
     return path;
@@ -1218,15 +1456,36 @@ class EnemyArt {
   }
 
   /// 裙装的明暗与衣褶：让深色剪影内部有可读的结构。
-  static void _paintDressShading(Canvas canvas, double w, double h, Color theme, EnemyPose pose) {
+  static void _paintDressShading(
+    Canvas canvas,
+    double w,
+    double h,
+    Color theme,
+    EnemyPose pose,
+  ) {
     final hem = h * _hemY;
     // 胸口到腰的高光
     final highlight = Path()
       ..moveTo(-w * 0.086, h * (_bustY - 0.03))
-      ..quadraticBezierTo(-w * 0.040, h * _waistY, -w * 0.072, h * (_hipY + 0.03))
+      ..quadraticBezierTo(
+        -w * 0.040,
+        h * _waistY,
+        -w * 0.072,
+        h * (_hipY + 0.03),
+      )
       ..quadraticBezierTo(0, h * 0.655, w * 0.072, h * (_hipY + 0.03))
-      ..quadraticBezierTo(w * 0.040, h * _waistY, w * 0.086, h * (_bustY - 0.03))
-      ..quadraticBezierTo(0, h * (_bustY - 0.065), -w * 0.086, h * (_bustY - 0.03))
+      ..quadraticBezierTo(
+        w * 0.040,
+        h * _waistY,
+        w * 0.086,
+        h * (_bustY - 0.03),
+      )
+      ..quadraticBezierTo(
+        0,
+        h * (_bustY - 0.065),
+        -w * 0.086,
+        h * (_bustY - 0.03),
+      )
       ..close();
     canvas.drawPath(
       highlight,
@@ -1234,7 +1493,10 @@ class EnemyArt {
         ..shader = ui.Gradient.linear(
           Offset(0, h * _bustY),
           Offset(0, h * _hipY),
-          [Colors.white.withValues(alpha: 0.12), Colors.white.withValues(alpha: 0.0)],
+          [
+            Colors.white.withValues(alpha: 0.12),
+            Colors.white.withValues(alpha: 0.0),
+          ],
         ),
     );
 
@@ -1282,16 +1544,19 @@ class EnemyArt {
         ..shader = ui.Gradient.linear(
           Offset(0, h * 0.29),
           Offset(0, h * 0.36),
-          [
-            theme.withValues(alpha: 0.55),
-            theme.withValues(alpha: 0.05),
-          ],
+          [theme.withValues(alpha: 0.55), theme.withValues(alpha: 0.05)],
         ),
     );
   }
 
   /// 胸口的契约宝石，随相位变亮。
-  static void _paintChestGem(Canvas canvas, double w, double h, Color theme, EnemyPose pose) {
+  static void _paintChestGem(
+    Canvas canvas,
+    double w,
+    double h,
+    Color theme,
+    EnemyPose pose,
+  ) {
     final glow = 0.5 + pose.phase * 0.14 + (pose.enraged ? 0.3 : 0.0);
     final center = Offset(0, h * 0.415);
     final s = w * 0.022;
@@ -1307,7 +1572,10 @@ class EnemyArt {
         ..color = theme.withValues(alpha: glow * 0.6)
         ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.02),
     );
-    canvas.drawPath(gem, Paint()..color = Color.lerp(theme, Colors.white, 0.55)!);
+    canvas.drawPath(
+      gem,
+      Paint()..color = Color.lerp(theme, Colors.white, 0.55)!,
+    );
   }
 
   /// 面部：一张浅色的「脸」，配合发光的眼睛。
@@ -1338,7 +1606,10 @@ class EnemyArt {
     );
 
     final blink = math.sin(t * 0.85) > 0.965 ? 0.12 : 1.0;
-    final glow = (0.65 + pose.phase * 0.12 + (pose.enraged ? 0.4 : 0.0)).clamp(0.0, 1.0);
+    final glow = (0.65 + pose.phase * 0.12 + (pose.enraged ? 0.4 : 0.0)).clamp(
+      0.0,
+      1.0,
+    );
     for (final side in [-1.0, 1.0]) {
       final p = Offset(w * 0.032 * side, h * _eyeY);
       canvas.drawOval(
@@ -1373,7 +1644,10 @@ class EnemyArt {
       );
       final path = Path()..moveTo(p.dx, p.dy);
       for (var k = 0; k < 3; k++) {
-        p += Offset((rng.nextDouble() - 0.5) * w * 0.06, rng.nextDouble() * h * 0.045);
+        p += Offset(
+          (rng.nextDouble() - 0.5) * w * 0.06,
+          rng.nextDouble() * h * 0.045,
+        );
         path.lineTo(p.dx, p.dy);
       }
       canvas.drawPath(path, paint);

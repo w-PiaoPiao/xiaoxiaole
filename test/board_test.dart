@@ -8,15 +8,14 @@ List<String> blankLayout() {
   const palette = ['R', 'B', 'G', 'Y', 'P'];
   return [
     for (var y = 0; y < BoardEngine.rows; y++)
-      [for (var x = 0; x < BoardEngine.cols; x++) palette[(x + 2 * y) % 5]].join(),
+      [for (var x = 0; x < BoardEngine.cols; x++) palette[(x + 2 * y) % 5]]
+          .join(),
   ];
 }
 
 /// 在底棋盘上按坐标涂色，写法比手写整行清晰得多。
 List<String> layoutWith(Map<int, String> patches) {
-  final grid = [
-    for (final row in blankLayout()) row.split(''),
-  ];
+  final grid = [for (final row in blankLayout()) row.split('')];
   patches.forEach((index, color) {
     grid[index ~/ BoardEngine.cols][index % BoardEngine.cols] = color;
   });
@@ -35,7 +34,11 @@ void main() {
         final board = BoardEngine(seed: seed)..reset();
         expect(board.findMatches(), isEmpty, reason: 'seed=$seed 不应有现成消除');
         expect(board.hasValidMove(), isTrue, reason: 'seed=$seed 应有可行操作');
-        expect(board.cells.where((g) => g == null), isEmpty, reason: '初始棋盘不应有空洞');
+        expect(
+          board.cells.where((g) => g == null),
+          isEmpty,
+          reason: '初始棋盘不应有空洞',
+        );
       }
     });
   });
@@ -67,7 +70,12 @@ void main() {
 
     test('横向四连会生成横向强化宝石', () {
       final board = BoardEngine.fromLayout(
-        layoutWith({ix(0, 0): 'R', ix(1, 0): 'R', ix(2, 0): 'R', ix(3, 0): 'R'}),
+        layoutWith({
+          ix(0, 0): 'R',
+          ix(1, 0): 'R',
+          ix(2, 0): 'R',
+          ix(3, 0): 'R',
+        }),
       );
       final matches = board.findMatches();
       expect(matches.length, 1);
@@ -77,7 +85,12 @@ void main() {
 
     test('纵向四连会生成纵向强化宝石', () {
       final board = BoardEngine.fromLayout(
-        layoutWith({ix(0, 0): 'R', ix(0, 1): 'R', ix(0, 2): 'R', ix(0, 3): 'R'}),
+        layoutWith({
+          ix(0, 0): 'R',
+          ix(0, 1): 'R',
+          ix(0, 2): 'R',
+          ix(0, 3): 'R',
+        }),
       );
       expect(board.findMatches().single.spawn, SpecialKind.lineV);
     });
@@ -121,20 +134,18 @@ void main() {
   group('交换与结算', () {
     /// 底棋盘上构造一步「蓝色三连」：交换 (2,0) 与 (2,1) 后第 0 行变成 BBB。
     BoardEngine swapBoard() => BoardEngine.fromLayout(
-          layoutWith({
-            ix(0, 0): 'B',
-            ix(1, 0): 'B',
-            ix(2, 0): 'R',
-            ix(2, 1): 'B',
-          }),
-        );
+      layoutWith({ix(0, 0): 'B', ix(1, 0): 'B', ix(2, 0): 'R', ix(2, 1): 'B'}),
+    );
 
     test('能形成消除的相邻交换是合法的，不相邻则非法', () {
       final board = swapBoard();
       expect(board.canSwap(ix(2, 0), ix(2, 1)), isTrue);
       expect(board.canSwap(ix(0, 0), ix(7, 7)), isFalse, reason: '不相邻');
-      expect(board.canSwap(ix(0, 0), ix(1, 0)), isFalse,
-          reason: '交换后无法形成消除，应判定非法');
+      expect(
+        board.canSwap(ix(0, 0), ix(1, 0)),
+        isFalse,
+        reason: '交换后无法形成消除，应判定非法',
+      );
     });
 
     test('交换后结算出正确的消除数量', () {
@@ -165,7 +176,10 @@ void main() {
       var found = false;
       for (var i = 0; i < board.cells.length && !found; i++) {
         final x = i % BoardEngine.cols, y = i ~/ BoardEngine.cols;
-        for (final j in [if (x + 1 < BoardEngine.cols) i + 1, if (y + 1 < BoardEngine.rows) i + BoardEngine.cols]) {
+        for (final j in [
+          if (x + 1 < BoardEngine.cols) i + 1,
+          if (y + 1 < BoardEngine.rows) i + BoardEngine.cols,
+        ]) {
           if (!board.canSwap(i, j)) continue;
           board.swapCells(i, j);
           final steps = board.resolveSwap(i, j);
@@ -184,8 +198,11 @@ void main() {
   group('强化宝石', () {
     test('交换横线宝石会引爆整行', () {
       final board = BoardEngine.fromLayout(blankLayout());
-      board.cells[ix(3, 3)] =
-          Gem(id: 9001, type: GemType.red, special: SpecialKind.lineH);
+      board.cells[ix(3, 3)] = Gem(
+        id: 9001,
+        type: GemType.red,
+        special: SpecialKind.lineH,
+      );
       final a = ix(3, 3), b = ix(4, 3);
       expect(board.canSwap(a, b), isTrue);
 
@@ -193,14 +210,21 @@ void main() {
       final steps = board.resolveSwap(a, b);
 
       expect(steps.first.activations.single.kind, SpecialKind.lineH);
-      expect(steps.first.cleared.length, BoardEngine.cols, reason: '整行 8 格全部清除');
+      expect(
+        steps.first.cleared.length,
+        BoardEngine.cols,
+        reason: '整行 8 格全部清除',
+      );
       expect(steps.first.counts[GemType.red], 2, reason: '该行只有 2 颗是红色');
     });
 
     test('交换爆裂宝石会清除 3x3', () {
       final board = BoardEngine.fromLayout(blankLayout());
-      board.cells[ix(3, 3)] =
-          Gem(id: 9002, type: GemType.blue, special: SpecialKind.burst);
+      board.cells[ix(3, 3)] = Gem(
+        id: 9002,
+        type: GemType.blue,
+        special: SpecialKind.burst,
+      );
       final a = ix(3, 3), b = ix(4, 3);
 
       board.swapCells(a, b);
@@ -212,8 +236,11 @@ void main() {
 
     test('棱镜与普通宝石交换会清除全场同色', () {
       final board = BoardEngine.fromLayout(blankLayout());
-      board.cells[ix(0, 0)] =
-          Gem(id: 9003, type: GemType.red, special: SpecialKind.prism);
+      board.cells[ix(0, 0)] = Gem(
+        id: 9003,
+        type: GemType.red,
+        special: SpecialKind.prism,
+      );
       final greenBefore = countColor(board, GemType.green);
       expect(greenBefore, greaterThan(3));
 
@@ -222,14 +249,20 @@ void main() {
       final steps = board.resolveSwap(a, b);
 
       expect(steps.first.activations.single.kind, SpecialKind.prism);
-      expect(steps.first.counts[GemType.green], greenBefore,
-          reason: '棱镜应清除全场所有绿色宝石');
+      expect(
+        steps.first.counts[GemType.green],
+        greenBefore,
+        reason: '棱镜应清除全场所有绿色宝石',
+      );
     });
 
     test('必杀技十字清除', () {
       final board = BoardEngine.fromLayout(blankLayout());
       final steps = board.resolveUltimate(ix(4, 4));
-      expect(steps.first.cleared.length, BoardEngine.cols + BoardEngine.rows - 1);
+      expect(
+        steps.first.cleared.length,
+        BoardEngine.cols + BoardEngine.rows - 1,
+      );
     });
   });
 
@@ -240,7 +273,8 @@ void main() {
       const colors = ['R', 'B', 'G'];
       return [
         for (var y = 0; y < BoardEngine.rows; y++)
-          [for (var x = 0; x < BoardEngine.cols; x++) colors[(x + y) % 3]].join(),
+          [for (var x = 0; x < BoardEngine.cols; x++) colors[(x + y) % 3]]
+              .join(),
       ];
     }
 

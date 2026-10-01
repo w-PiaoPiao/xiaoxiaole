@@ -21,7 +21,10 @@ class IconPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    final rounded = RRect.fromRectAndRadius(rect, Radius.circular(size.width * 0.22));
+    final rounded = RRect.fromRectAndRadius(
+      rect,
+      Radius.circular(size.width * 0.22),
+    );
 
     canvas.save();
     canvas.clipRRect(rounded);
@@ -41,14 +44,21 @@ class IconPainter extends CustomPainter {
       center,
       size.width * 0.52,
       Paint()
-        ..shader = RadialGradient(
-          colors: [_gold.withValues(alpha: 0.30), Colors.transparent],
-        ).createShader(Rect.fromCircle(center: center, radius: size.width * 0.52)),
+        ..shader =
+            RadialGradient(
+              colors: [_gold.withValues(alpha: 0.30), Colors.transparent],
+            ).createShader(
+              Rect.fromCircle(center: center, radius: size.width * 0.52),
+            ),
     );
 
     // 底部的魔法阵弧线
     canvas.drawArc(
-      Rect.fromCenter(center: Offset(center.dx, size.height * 0.86), width: size.width * 0.76, height: size.width * 0.30),
+      Rect.fromCenter(
+        center: Offset(center.dx, size.height * 0.86),
+        width: size.width * 0.76,
+        height: size.width * 0.30,
+      ),
       0,
       math.pi * 2,
       false,
@@ -62,7 +72,11 @@ class IconPainter extends CustomPainter {
     final gemSide = size.width * 0.56;
     GemArt.paint(
       canvas,
-      Rect.fromCenter(center: Offset(center.dx, center.dy - size.height * 0.03), width: gemSide, height: gemSide),
+      Rect.fromCenter(
+        center: Offset(center.dx, center.dy - size.height * 0.03),
+        width: gemSide,
+        height: gemSide,
+      ),
       GemType.red,
       SpecialKind.none,
       glow: 1.0,
@@ -77,7 +91,10 @@ class IconPainter extends CustomPainter {
       GemArt.paint(
         canvas,
         Rect.fromCenter(
-          center: Offset(center.dx + size.width * entry.$2, center.dy + size.height * entry.$3),
+          center: Offset(
+            center.dx + size.width * entry.$2,
+            center.dy + size.height * entry.$3,
+          ),
           width: side,
           height: side,
         ),
@@ -119,7 +136,8 @@ Future<void> _writePng(WidgetTester tester, int px, String path) async {
   );
   await tester.pumpAndSettle();
 
-  final boundary = key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+  final boundary =
+      key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
   // 图片编码是真正的异步工作，必须放在 runAsync 里，否则测试时钟会把它卡住。
   await tester.runAsync(() async {
     final image = await boundary.toImage(pixelRatio: 1.0);

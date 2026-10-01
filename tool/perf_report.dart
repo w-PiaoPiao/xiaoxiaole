@@ -26,8 +26,12 @@ Future<double> _bench(
   CustomPainter painter,
   Size size, {
   int frames = 120,
-}) =>
-    _benchDraw(tester, (canvas, s) => painter.paint(canvas, s), size, frames: frames);
+}) => _benchDraw(
+  tester,
+  (canvas, s) => painter.paint(canvas, s),
+  size,
+  frames: frames,
+);
 
 /// 逐帧执行一段绘制回调并光栅化，返回平均每帧耗时（毫秒）。
 ///
@@ -78,13 +82,19 @@ Future<double> _benchDraw(
 /// 棋盘与战斗区都拆成了「静态底层 + 动态层」两层，静态层只在尺寸/配色变化时
 /// 重绘，因此每帧预算要看的是动态层——索引 1。
 CustomPainter _painterOf(WidgetTester tester, Type view, {int index = 1}) {
-  final finder = find.descendant(of: find.byType(view), matching: find.byType(CustomPaint));
+  final finder = find.descendant(
+    of: find.byType(view),
+    matching: find.byType(CustomPaint),
+  );
   final render = tester.renderObject<RenderCustomPaint>(finder.at(index));
   return render.painter!;
 }
 
 Size _painterSize(WidgetTester tester, Type view, {int index = 1}) {
-  final finder = find.descendant(of: find.byType(view), matching: find.byType(CustomPaint));
+  final finder = find.descendant(
+    of: find.byType(view),
+    matching: find.byType(CustomPaint),
+  );
   return tester.renderObject<RenderCustomPaint>(finder.at(index)).size;
 }
 
@@ -106,8 +116,12 @@ void main() {
             scaffoldBackgroundColor: Palette.bgDeep,
           ),
           builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(scale)),
-            child: MediaQuery.withClampedTextScaling(maxScaleFactor: 1.3, child: child!),
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(scale)),
+            child: MediaQuery.withClampedTextScaling(
+              maxScaleFactor: 1.3,
+              child: child!,
+            ),
           ),
           home: const GameScreen(),
         ),
@@ -145,7 +159,11 @@ void main() {
           canvas,
           '- 128',
           Offset(size.width * 0.5, size.height * 0.5),
-          const TextStyle(color: Colors.red, fontSize: 34, fontWeight: FontWeight.w900),
+          const TextStyle(
+            color: Colors.red,
+            fontSize: 34,
+            fontWeight: FontWeight.w900,
+          ),
           alpha: 0.8,
           strokeColor: Colors.black,
           strokeWidth: 5,
@@ -154,7 +172,11 @@ void main() {
           canvas,
           '连击 x3',
           Offset(size.width * 0.5, size.height * 0.3),
-          const TextStyle(color: Colors.amber, fontSize: 32, fontWeight: FontWeight.w900),
+          const TextStyle(
+            color: Colors.amber,
+            fontSize: 32,
+            fontWeight: FontWeight.w900,
+          ),
           scale: 1.1,
           strokeColor: Colors.black,
           strokeWidth: 5,
@@ -162,13 +184,15 @@ void main() {
       }, const Size(411, 200));
 
       // ignore: avoid_print
-      print('[字体 ${scale}x] 棋盘 ${boardMs.toStringAsFixed(3)} ms/帧  '
-          '战斗区 ${battleMs.toStringAsFixed(3)} ms/帧  '
-          '（其中角色 ${charMs.toStringAsFixed(3)}）  '
-          '飘字x2 ${floatMs.toStringAsFixed(3)} ms/帧  '
-          '合计 ${(boardMs + battleMs + floatMs).toStringAsFixed(3)} ms/帧  '
-          '(${boardSize.width.toInt()}x${boardSize.height.toInt()} + '
-          '${battleSize.width.toInt()}x${battleSize.height.toInt()})');
+      print(
+        '[字体 ${scale}x] 棋盘 ${boardMs.toStringAsFixed(3)} ms/帧  '
+        '战斗区 ${battleMs.toStringAsFixed(3)} ms/帧  '
+        '（其中角色 ${charMs.toStringAsFixed(3)}）  '
+        '飘字x2 ${floatMs.toStringAsFixed(3)} ms/帧  '
+        '合计 ${(boardMs + battleMs + floatMs).toStringAsFixed(3)} ms/帧  '
+        '(${boardSize.width.toInt()}x${boardSize.height.toInt()} + '
+        '${battleSize.width.toInt()}x${battleSize.height.toInt()})',
+      );
 
       // 60fps 的预算是 16.7ms；这里给软件光栅化留足余量，只拦住明显退化。
       expect(boardMs + battleMs + floatMs, lessThan(16.0), reason: '单帧绘制开销过大');

@@ -35,6 +35,11 @@ class BattleView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Color(level.enemy.themeColor);
+    // 这个 widget 重建通常意味着战斗数值变了（血量、狂暴、易伤），而战斗区
+    // 里的角色剪影直接依赖这些数值。它的重绘平时由 fx 的信号驱动，
+    // 「减少动态效果」下那条路径会安静下来——这里补一次重绘，保证数值变化
+    // 一定反映到画面上。
+    fx.battleRepaint.ping();
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -42,11 +47,7 @@ class BattleView extends StatelessWidget {
         CustomPaint(painter: _BattleBackdropPainter(theme: theme)),
         RepaintBoundary(
           child: CustomPaint(
-            painter: _BattlePainter(
-              battle: battle,
-              fx: fx,
-              theme: theme,
-            ),
+            painter: _BattlePainter(battle: battle, fx: fx, theme: theme),
           ),
         ),
         SafeArea(
@@ -80,7 +81,8 @@ class BattleView extends StatelessWidget {
                       tooltip: '玩法说明',
                       onTap: onHelp!,
                     ),
-                  if (onHelp != null && onMenu != null) const SizedBox(width: 8),
+                  if (onHelp != null && onMenu != null)
+                    const SizedBox(width: 8),
                   if (onMenu != null)
                     _HeaderButton(
                       icon: Icons.tune,
@@ -116,7 +118,8 @@ class BattleView extends StatelessWidget {
   }
 
   Widget _enemyBar(BuildContext context, Color theme) {
-    final shieldRatio = battle.enemyShield / (battle.def.maxHp / 3).clamp(1, 1 << 30);
+    final shieldRatio =
+        battle.enemyShield / (battle.def.maxHp / 3).clamp(1, 1 << 30);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -128,7 +131,8 @@ class BattleView extends StatelessWidget {
           trailing: '${battle.enemyHp}',
           // 狂暴线：让"什么时候会变天"变成看得见的信息，而不是突然袭击。
           markers: battle.def.enrages ? [battle.def.enrageAt] : const [],
-          semanticLabel: '${battle.def.name} 生命 ${battle.enemyHp} / ${battle.def.maxHp}',
+          semanticLabel:
+              '${battle.def.name} 生命 ${battle.enemyHp} / ${battle.def.maxHp}',
         ),
         const SizedBox(height: 4),
         // 状态标签原本挂在标题行右侧，会和右上角的按钮抢位置；
@@ -138,7 +142,9 @@ class BattleView extends StatelessWidget {
             Flexible(
               child: Text(
                 level.enemy.title,
-                style: AppText.subtitle.copyWith(color: theme.withValues(alpha: 0.85)),
+                style: AppText.subtitle.copyWith(
+                  color: theme.withValues(alpha: 0.85),
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -193,7 +199,9 @@ class BattleView extends StatelessWidget {
         const Spacer(),
         if (danger)
           Tag(
-            text: battle.nextAttackIsHeavy ? '重击 ${battle.incomingDamage}' : '攻击 ${battle.incomingDamage}',
+            text: battle.nextAttackIsHeavy
+                ? '重击 ${battle.incomingDamage}'
+                : '攻击 ${battle.incomingDamage}',
             color: Palette.danger,
             dense: true,
           ),
@@ -209,7 +217,11 @@ class _HeaderButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback onTap;
 
-  const _HeaderButton({required this.icon, required this.tooltip, required this.onTap});
+  const _HeaderButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -296,11 +308,8 @@ class _BattlePainter extends CustomPainter {
   final FxController fx;
   final Color theme;
 
-  _BattlePainter({
-    required this.battle,
-    required this.fx,
-    required this.theme,
-  }) : super(repaint: fx);
+  _BattlePainter({required this.battle, required this.fx, required this.theme})
+    : super(repaint: fx.battleRepaint);
 
   static double _noise(int i) {
     final v = math.sin(i * 12.9898) * 43758.5453;
@@ -319,7 +328,9 @@ class _BattlePainter extends CustomPainter {
     _paintMotes(canvas, size);
     _paintCharacter(canvas, size);
     CombatArt.paintStrikes(canvas, size, fx.strikes);
-    if (fx.ultimate != null) CombatArt.paintUltimate(canvas, size, fx.ultimate!);
+    if (fx.ultimate != null) {
+      CombatArt.paintUltimate(canvas, size, fx.ultimate!);
+    }
     _paintFloats(canvas, size);
   }
 
@@ -329,11 +340,14 @@ class _BattlePainter extends CustomPainter {
     // 循环里的 34 次 lerp 与 withValues 都是白花的。
     final base = Color.lerp(theme, Colors.white, 0.4)!;
     final fade = 1 - fx.dissolve * 0.5;
+    // 「减少动态效果」下浮尘不再飘：它们本来是屏幕上唯一"永远在动"的东西，
+    // 对前庭敏感的用户来说正是该收敛的部分。
+    final time = fx.reducedMotion ? 0.0 : fx.time;
     for (var i = 0; i < _motes.length; i++) {
       final mote = _motes[i];
       // Dart 对 double 的 % 是欧几里得取模，结果恒非负，不必再补一次。
-      final y = (mote.r2 - fx.time * mote.speed) % 1.0;
-      final x = mote.r1 * size.width + math.sin(fx.time * 0.5 + i) * 10;
+      final y = (mote.r2 - time * mote.speed) % 1.0;
+      final x = mote.r1 * size.width + math.sin(time * 0.5 + i) * 10;
       final alpha = (0.10 + 0.30 * mote.r1) * fade;
       // 几十颗浮尘逐个模糊在软件渲染下太贵，用淡淡的圆点即可
       canvas.drawCircle(

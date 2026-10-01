@@ -67,7 +67,8 @@ class BoardRules {
       other.lineBecomesCross == lineBecomesCross;
 
   @override
-  int get hashCode => Object.hash(prismExtraColors, burstRadius, lineBecomesCross);
+  int get hashCode =>
+      Object.hash(prismExtraColors, burstRadius, lineBecomesCross);
 }
 
 /// 战斗层的肉鸽质变与代价。
@@ -201,20 +202,20 @@ class RoguelikeEffects {
 
   @override
   int get hashCode => Object.hash(
-        damageMul,
-        comboBaseBonus,
-        critToShield,
-        healOverflowToShield,
-        shieldReflect,
-        rageOverflowDamage,
-        curseToSpecialPower,
-        cursePersists,
-        executeThreshold,
-        executeBonus,
-        selfDamagePerTurn,
-        shieldGainMul,
-        ragePerTurn,
-        ultimateCostMul,
-        boardRules,
-      );
+    damageMul,
+    comboBaseBonus,
+    critToShield,
+    healOverflowToShield,
+    shieldReflect,
+    rageOverflowDamage,
+    curseToSpecialPower,
+    cursePersists,
+    executeThreshold,
+    executeBonus,
+    selfDamagePerTurn,
+    shieldGainMul,
+    ragePerTurn,
+    ultimateCostMul,
+    boardRules,
+  );
 }

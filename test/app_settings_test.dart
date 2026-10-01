@@ -14,12 +14,14 @@ void main() {
     test('写入后能原样读回（战役）', () async {
       final settings = AppSettings();
       await settings.load();
-      settings.saveResume(const ResumeData(
-        mode: GameMode.campaign,
-        level: 3,
-        carryHp: 187,
-        upgrades: {'blade': 2, 'crit': 1},
-      ));
+      settings.saveResume(
+        const ResumeData(
+          mode: GameMode.campaign,
+          level: 3,
+          carryHp: 187,
+          upgrades: {'blade': 2, 'crit': 1},
+        ),
+      );
 
       final other = AppSettings();
       await other.load();
@@ -35,12 +37,14 @@ void main() {
     test('写入后能原样读回（无尽 + 多层强化）', () async {
       final settings = AppSettings();
       await settings.load();
-      settings.saveResume(const ResumeData(
-        mode: GameMode.endless,
-        level: 8,
-        carryHp: 210,
-        upgrades: {'regen': 3},
-      ));
+      settings.saveResume(
+        const ResumeData(
+          mode: GameMode.endless,
+          level: 8,
+          carryHp: 210,
+          upgrades: {'regen': 3},
+        ),
+      );
 
       final other = AppSettings();
       await other.load();
@@ -53,36 +57,45 @@ void main() {
     test('覆盖写入时旧的强化层会被清掉', () async {
       final settings = AppSettings();
       await settings.load();
-      settings.saveResume(const ResumeData(
-        mode: GameMode.campaign,
-        level: 2,
-        carryHp: 300,
-        upgrades: {'blade': 5},
-      ));
-      settings.saveResume(const ResumeData(
-        mode: GameMode.campaign,
-        level: 3,
-        carryHp: 280,
-        upgrades: {'crit': 1},
-      ));
+      settings.saveResume(
+        const ResumeData(
+          mode: GameMode.campaign,
+          level: 2,
+          carryHp: 300,
+          upgrades: {'blade': 5},
+        ),
+      );
+      settings.saveResume(
+        const ResumeData(
+          mode: GameMode.campaign,
+          level: 3,
+          carryHp: 280,
+          upgrades: {'crit': 1},
+        ),
+      );
 
       final other = AppSettings();
       await other.load();
       final resume = other.resume!;
-      expect(resume.upgrades.containsKey('blade'), isFalse,
-          reason: '重开后旧的强化不该残留');
+      expect(
+        resume.upgrades.containsKey('blade'),
+        isFalse,
+        reason: '重开后旧的强化不该残留',
+      );
       expect(resume.upgrades['crit'], 1);
     });
 
     test('clearResume 之后 resume 为空', () async {
       final settings = AppSettings();
       await settings.load();
-      settings.saveResume(const ResumeData(
-        mode: GameMode.endless,
-        level: 1,
-        carryHp: 300,
-        upgrades: {},
-      ));
+      settings.saveResume(
+        const ResumeData(
+          mode: GameMode.endless,
+          level: 1,
+          carryHp: 300,
+          upgrades: {},
+        ),
+      );
       expect(settings.resume, isNotNull);
       settings.clearResume();
 
@@ -144,7 +157,11 @@ void main() {
 
       final resume = settings.resume!;
       expect(resume.carryHp, 0, reason: '负数生命归零，由上层换成满血开局');
-      expect(resume.upgrades.containsKey('blade'), isFalse, reason: '层数 <= 0 的条目丢弃');
+      expect(
+        resume.upgrades.containsKey('blade'),
+        isFalse,
+        reason: '层数 <= 0 的条目丢弃',
+      );
       expect(resume.upgrades['crit'], 99, reason: '层数上限夹到 99');
       expect(resume.upgrades.containsKey('bogus'), isFalse, reason: '非整数层数丢弃');
     });
@@ -189,12 +206,14 @@ void main() {
 
       final settings = AppSettings();
       await settings.load();
-      settings.saveResume(const ResumeData(
-        mode: GameMode.campaign,
-        level: 1,
-        carryHp: 300,
-        upgrades: {'crit': 1},
-      ));
+      settings.saveResume(
+        const ResumeData(
+          mode: GameMode.campaign,
+          level: 1,
+          carryHp: 300,
+          upgrades: {'crit': 1},
+        ),
+      );
       // 写盘是异步的（而且不阻塞调用方），把事件队列排空后再检查磁盘状态。
       await pumpEventQueue();
 
@@ -229,12 +248,14 @@ void main() {
       final settings = AppSettings();
       await settings.load();
       settings.recordEndless(12);
-      settings.saveResume(const ResumeData(
-        mode: GameMode.endless,
-        level: 3,
-        carryHp: 260,
-        upgrades: {'crit': 2},
-      ));
+      settings.saveResume(
+        const ResumeData(
+          mode: GameMode.endless,
+          level: 3,
+          carryHp: 260,
+          upgrades: {'crit': 2},
+        ),
+      );
       settings.resetProgress();
 
       final other = AppSettings();
@@ -242,6 +263,100 @@ void main() {
       expect(other.endlessBest, 0);
       expect(other.resume, isNull);
       expect(other.hasProgress, isFalse);
+    });
+  });
+
+  group('战役进度记录', () {
+    test('通关一关：解锁下一关并记录星级与回合数', () async {
+      final settings = AppSettings();
+      await settings.load();
+      settings.recordClear(levelIndex: 0, stars: 2, turns: 12, levelCount: 6);
+
+      expect(settings.unlockedLevel, 1);
+      expect(settings.starsOf(0), 2);
+      expect(settings.turnsOf(0), 12);
+
+      final other = AppSettings();
+      await other.load();
+      expect(other.unlockedLevel, 1, reason: '解锁要真的落盘');
+      expect(other.starsOf(0), 2);
+      expect(other.turnsOf(0), 12);
+    });
+
+    test('星级只升不降，回合数只记更少的', () async {
+      final settings = AppSettings();
+      await settings.load();
+      settings.recordClear(levelIndex: 0, stars: 3, turns: 10, levelCount: 6);
+      settings.recordClear(levelIndex: 0, stars: 1, turns: 20, levelCount: 6);
+
+      expect(settings.starsOf(0), 3, reason: '更差的成绩不该覆盖最佳');
+      expect(settings.turnsOf(0), 10);
+    });
+
+    test('打出更好成绩时刷新纪录', () async {
+      final settings = AppSettings();
+      await settings.load();
+      settings.recordClear(levelIndex: 1, stars: 1, turns: 30, levelCount: 6);
+      settings.recordClear(levelIndex: 1, stars: 3, turns: 14, levelCount: 6);
+
+      expect(settings.starsOf(1), 3);
+      expect(settings.turnsOf(1), 14);
+    });
+
+    test('最后一关通关不会把解锁数推过界', () async {
+      final settings = AppSettings();
+      await settings.load();
+      settings.recordClear(levelIndex: 5, stars: 3, turns: 9, levelCount: 6);
+
+      expect(settings.unlockedLevel, 0, reason: '没有第 7 关可以解锁');
+      expect(settings.starsOf(5), 3, reason: '但这一关的战绩照记');
+      expect(settings.hasProgress, isTrue);
+    });
+  });
+
+  group('设置开关', () {
+    test('值不变时不写盘也不通知监听者', () async {
+      final settings = AppSettings();
+      await settings.load();
+      var notified = 0;
+      settings.addListener(() => notified++);
+
+      settings.setSound(true); // 本来就是 true
+      expect(notified, 0, reason: '值没变就不该惊动监听者');
+
+      settings.setSound(false);
+      expect(notified, 1);
+
+      final other = AppSettings();
+      await other.load();
+      expect(other.sound, isFalse, reason: '改了就要落盘');
+    });
+
+    test('三个开关各自独立落盘', () async {
+      final settings = AppSettings();
+      await settings.load();
+      settings.setSound(false);
+      settings.setHaptics(false);
+      settings.setScreenShake(false);
+
+      final other = AppSettings();
+      await other.load();
+      expect(other.sound, isFalse);
+      expect(other.haptics, isFalse);
+      expect(other.screenShake, isFalse);
+    });
+
+    test('清空进度保留设置', () async {
+      final settings = AppSettings();
+      await settings.load();
+      settings.setHaptics(false);
+      settings.recordEndless(5);
+      settings.resetProgress();
+
+      final other = AppSettings();
+      await other.load();
+      expect(other.haptics, isFalse, reason: '设置不该被清空进度一起带走');
+      expect(other.endlessBest, 0);
     });
   });
 }

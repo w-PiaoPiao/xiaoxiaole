@@ -92,8 +92,8 @@ class CombatArt {
       // 弧心放在敌人的斜上方：弧线自上而下穿过身体，两道交叉成 X。
       // 尺寸按「角色大小」而不是整个舞台来定，否则在竖长比例的战斗区里
       // 剑气会拉成两根又长又粗的光柱。
-      final arcCenter = center +
-          Offset(-sign * size.width * 0.34, -size.height * 0.10);
+      final arcCenter =
+          center + Offset(-sign * size.width * 0.34, -size.height * 0.10);
       final arcRadius = (center - arcCenter).distance;
       final aim = (center - arcCenter).direction;
       const spread = 0.92;
@@ -107,7 +107,8 @@ class CombatArt {
       ]) {
         canvas.drawPath(
           taperedArc(arcCenter, arcRadius, start, sweep, maxWidth * layer.$1),
-          Paint()..color = layer.$3.withValues(alpha: alpha * layer.$2 * layer.$4),
+          Paint()
+            ..color = layer.$3.withValues(alpha: alpha * layer.$2 * layer.$4),
         );
       }
 
@@ -125,8 +126,15 @@ class CombatArt {
     if (alpha <= 0.01) return;
 
     final target = Offset(strike.nx * size.width, strike.ny * size.height);
-    final top = Offset(target.dx + (_noise(strike.seed, 0) - 0.5) * size.width * 0.3, -size.height * 0.05);
-    final drawn = Offset.lerp(top, target, Curves.easeInCubic.transform(strikeT))!;
+    final top = Offset(
+      target.dx + (_noise(strike.seed, 0) - 0.5) * size.width * 0.3,
+      -size.height * 0.05,
+    );
+    final drawn = Offset.lerp(
+      top,
+      target,
+      Curves.easeInCubic.transform(strikeT),
+    )!;
 
     // 折线主干
     final path = Path()..moveTo(top.dx, top.dy);
@@ -134,26 +142,36 @@ class CombatArt {
     for (var i = 1; i <= segments; i++) {
       final u = i / segments;
       final p = Offset.lerp(top, drawn, u)!;
-      final jitter = (_noise(strike.seed, i) - 0.5) * size.width * 0.16 * (1 - u * 0.5);
+      final jitter =
+          (_noise(strike.seed, i) - 0.5) * size.width * 0.16 * (1 - u * 0.5);
       path.lineTo(p.dx + jitter, p.dy);
     }
 
     // 三层叠加：光晕 → 电光 → 白核
-    canvas.drawPath(path, Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * (0.030 + strike.power * 0.016)
-      ..strokeJoin = StrokeJoin.round
-      ..color = Palette.rage.withValues(alpha: alpha * 0.30));
-    canvas.drawPath(path, Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * (0.014 + strike.power * 0.007)
-      ..strokeJoin = StrokeJoin.round
-      ..color = Palette.rage.withValues(alpha: alpha * 0.95));
-    canvas.drawPath(path, Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * 0.005
-      ..strokeJoin = StrokeJoin.round
-      ..color = Colors.white.withValues(alpha: alpha));
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.width * (0.030 + strike.power * 0.016)
+        ..strokeJoin = StrokeJoin.round
+        ..color = Palette.rage.withValues(alpha: alpha * 0.30),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.width * (0.014 + strike.power * 0.007)
+        ..strokeJoin = StrokeJoin.round
+        ..color = Palette.rage.withValues(alpha: alpha * 0.95),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.width * 0.005
+        ..strokeJoin = StrokeJoin.round
+        ..color = Colors.white.withValues(alpha: alpha),
+    );
 
     // 分叉
     for (var b = 0; b < 2; b++) {
@@ -170,10 +188,13 @@ class CombatArt {
           base.dx + dir * size.width * 0.13,
           base.dy + size.height * 0.13,
         );
-      canvas.drawPath(branch, Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = size.width * 0.008
-        ..color = Palette.rage.withValues(alpha: alpha * 0.7));
+      canvas.drawPath(
+        branch,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = size.width * 0.008
+          ..color = Palette.rage.withValues(alpha: alpha * 0.7),
+      );
     }
 
     // 落点闪
@@ -199,7 +220,9 @@ class CombatArt {
 
     // 符文环
     for (var i = 0; i < 2; i++) {
-      final r = size.width * (0.06 + 0.10 * i) + size.width * 0.14 * t * (1 + i * 0.6);
+      final r =
+          size.width * (0.06 + 0.10 * i) +
+          size.width * 0.14 * t * (1 + i * 0.6);
       canvas.drawCircle(
         center,
         r,
@@ -226,18 +249,41 @@ class CombatArt {
     );
 
     final skull = Path()
-      ..addRRect(RRect.fromRectAndRadius(
-        Rect.fromCenter(center: center.translate(0, -scale * 0.12), width: scale * 1.05, height: scale * 0.92),
-        Radius.circular(scale * 0.42),
-      ))
-      ..addRRect(RRect.fromRectAndRadius(
-        Rect.fromCenter(center: center.translate(0, scale * 0.34), width: scale * 0.62, height: scale * 0.44),
-        Radius.circular(scale * 0.16),
-      ));
-    canvas.drawPath(skull, Paint()..color = Colors.white.withValues(alpha: alpha * 0.92));
+      ..addRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: center.translate(0, -scale * 0.12),
+            width: scale * 1.05,
+            height: scale * 0.92,
+          ),
+          Radius.circular(scale * 0.42),
+        ),
+      )
+      ..addRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: center.translate(0, scale * 0.34),
+            width: scale * 0.62,
+            height: scale * 0.44,
+          ),
+          Radius.circular(scale * 0.16),
+        ),
+      );
+    canvas.drawPath(
+      skull,
+      Paint()..color = Colors.white.withValues(alpha: alpha * 0.92),
+    );
     final hole = Paint()..color = purple.withValues(alpha: alpha);
-    canvas.drawCircle(center.translate(-scale * 0.24, -scale * 0.16), scale * 0.17, hole);
-    canvas.drawCircle(center.translate(scale * 0.24, -scale * 0.16), scale * 0.17, hole);
+    canvas.drawCircle(
+      center.translate(-scale * 0.24, -scale * 0.16),
+      scale * 0.17,
+      hole,
+    );
+    canvas.drawCircle(
+      center.translate(scale * 0.24, -scale * 0.16),
+      scale * 0.17,
+      hole,
+    );
     canvas.drawPath(
       Path()
         ..moveTo(center.dx, center.dy + scale * 0.02)
@@ -257,29 +303,40 @@ class CombatArt {
       strike.ny * size.height - size.height * 0.10 * t,
     );
     final s = size.width * 0.045 * strike.power * (0.7 + 0.3 * t);
-    final green = Palette.hpPlayer;
+    const green = Palette.hpPlayer;
 
     // 十字
     final cross = Path()
-      ..addRRect(RRect.fromRectAndRadius(
-        Rect.fromCenter(center: center, width: s * 0.62, height: s * 2.3),
-        Radius.circular(s * 0.2),
-      ))
-      ..addRRect(RRect.fromRectAndRadius(
-        Rect.fromCenter(center: center, width: s * 2.3, height: s * 0.62),
-        Radius.circular(s * 0.2),
-      ));
-    canvas.drawPath(cross, Paint()..color = green.withValues(alpha: alpha * 0.28));
+      ..addRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(center: center, width: s * 0.62, height: s * 2.3),
+          Radius.circular(s * 0.2),
+        ),
+      )
+      ..addRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(center: center, width: s * 2.3, height: s * 0.62),
+          Radius.circular(s * 0.2),
+        ),
+      );
+    canvas.drawPath(
+      cross,
+      Paint()..color = green.withValues(alpha: alpha * 0.28),
+    );
     canvas.drawPath(
       Path()
-        ..addRRect(RRect.fromRectAndRadius(
-          Rect.fromCenter(center: center, width: s * 0.34, height: s * 1.7),
-          Radius.circular(s * 0.14),
-        ))
-        ..addRRect(RRect.fromRectAndRadius(
-          Rect.fromCenter(center: center, width: s * 1.7, height: s * 0.34),
-          Radius.circular(s * 0.14),
-        )),
+        ..addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(center: center, width: s * 0.34, height: s * 1.7),
+            Radius.circular(s * 0.14),
+          ),
+        )
+        ..addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(center: center, width: s * 1.7, height: s * 0.34),
+            Radius.circular(s * 0.14),
+          ),
+        ),
       Paint()..color = Colors.white.withValues(alpha: alpha * 0.92),
     );
 
@@ -287,7 +344,8 @@ class CombatArt {
     for (var i = 0; i < 6; i++) {
       final u = _noise(strike.seed, i);
       final x = center.dx + (u - 0.5) * size.width * 0.26;
-      final y = center.dy + size.height * 0.06 - size.height * 0.18 * t * (0.5 + u);
+      final y =
+          center.dy + size.height * 0.06 - size.height * 0.18 * t * (0.5 + u);
       canvas.drawCircle(
         Offset(x, y),
         size.width * (0.005 + u * 0.006),
@@ -305,7 +363,7 @@ class CombatArt {
         : 1.0;
     final alpha = (t < 0.65 ? 1.0 : 1 - (t - 0.65) / 0.35).clamp(0.0, 1.0);
     final r = size.width * 0.085 * strike.power * pop;
-    final blue = Palette.shield;
+    const blue = Palette.shield;
 
     final hex = Path();
     for (var i = 0; i < 6; i++) {
@@ -320,11 +378,14 @@ class CombatArt {
     hex.close();
 
     canvas.drawPath(hex, Paint()..color = blue.withValues(alpha: alpha * 0.22));
-    canvas.drawPath(hex, Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = size.width * 0.009
-      ..strokeJoin = StrokeJoin.round
-      ..color = blue.withValues(alpha: alpha * 0.9));
+    canvas.drawPath(
+      hex,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.width * 0.009
+        ..strokeJoin = StrokeJoin.round
+        ..color = blue.withValues(alpha: alpha * 0.9),
+    );
 
     // 盾面扫光
     canvas.save();
@@ -355,11 +416,18 @@ class CombatArt {
 
     for (var i = 0; i < 3; i++) {
       final spread = (i - 1) * size.width * 0.075;
-      final from = Offset(center.dx - size.width * 0.30 + spread, center.dy + size.height * 0.10);
-      final to = Offset(center.dx + size.width * 0.26 + spread, center.dy - size.height * 0.12);
+      final from = Offset(
+        center.dx - size.width * 0.30 + spread,
+        center.dy + size.height * 0.10,
+      );
+      final to = Offset(
+        center.dx + size.width * 0.26 + spread,
+        center.dy - size.height * 0.12,
+      );
       final grow = Curves.easeOutCubic.transform(t).clamp(0.0, 1.0);
       final end = Offset.lerp(from, to, grow)!;
-      final width = size.width * (0.020 - i * 0.003) * (0.8 + 0.4 * strike.power);
+      final width =
+          size.width * (0.020 - i * 0.003) * (0.8 + 0.4 * strike.power);
 
       canvas.drawPath(
         _taperedLine(from, end, width),
@@ -419,7 +487,7 @@ class CombatArt {
     final center = Offset(size.width * 0.5, size.height * 1.25);
     final radius = size.height * 0.92;
     final base = -math.pi * 0.72 + ult.tilt;
-    final sweepTotal = math.pi * 0.62;
+    const sweepTotal = math.pi * 0.62;
     final progress = Curves.easeOutCubic.transform((t / 0.72).clamp(0.0, 1.0));
     if (progress <= 0.001) return;
     final alpha = (t < 0.7 ? 1.0 : 1 - (t - 0.7) / 0.3).clamp(0.0, 1.0);
@@ -439,14 +507,16 @@ class CombatArt {
       );
       canvas.drawPath(
         arc,
-        Paint()..color = layer.$3.withValues(alpha: alpha * layer.$2 * layer.$4),
+        Paint()
+          ..color = layer.$3.withValues(alpha: alpha * layer.$2 * layer.$4),
       );
     }
 
     // 刀尖月华
     if (progress > 0.06) {
       final tipAngle = base + sweepTotal * progress;
-      final tip = center + Offset(math.cos(tipAngle), math.sin(tipAngle)) * radius;
+      final tip =
+          center + Offset(math.cos(tipAngle), math.sin(tipAngle)) * radius;
       canvas.drawCircle(
         tip,
         size.width * 0.035 * (1 - t * 0.5),
@@ -468,9 +538,11 @@ class CombatArt {
       canvas.drawCircle(
         p,
         size.width * (0.003 + u * 0.005),
-        Paint()..color = Palette.gold.withValues(alpha: alpha * 0.6 * (1 - progress * u)),
+        Paint()
+          ..color = Palette.gold.withValues(
+            alpha: alpha * 0.6 * (1 - progress * u),
+          ),
       );
     }
   }
-
 }

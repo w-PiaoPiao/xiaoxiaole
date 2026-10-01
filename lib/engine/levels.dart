@@ -93,11 +93,18 @@ class LevelDef {
   final String subtitle;
   final EnemyDef enemy;
 
+  /// 开局布置在棋盘上的机关（种类 → 数量）。空表示纯宝石棋盘。
+  ///
+  /// 机关是关卡的布置、不是敌人的技能：同一个关卡每次开局都摆同一套，
+  /// 数量固定、位置随机（由棋盘自己的随机源决定，可复现）。
+  final Map<ObstacleKind, int> obstacles;
+
   const LevelDef({
     required this.index,
     required this.name,
     required this.subtitle,
     required this.enemy,
+    this.obstacles = const {},
   });
 }
 
@@ -291,6 +298,8 @@ class Campaign {
         heavyMultiplier: 2.0,
         themeColor: 0xFF9B7BE8,
       ),
+      // 刺客出手快，两块冰封专门打断连招节奏：先破冰还是先输出，得选。
+      obstacles: {ObstacleKind.frost: 2},
     ),
     LevelDef(
       index: 3,
@@ -309,6 +318,9 @@ class Campaign {
         shieldRegen: 20,
         themeColor: 0xFFE85A7A,
       ),
+      // 巫女禁疗，再用一株毒藤逼玩家在"补血"和"清藤"之间排队。
+      // 冰封只放一块：这一关已经有禁疗加毒藤，机关再堆就把压力叠死了。
+      obstacles: {ObstacleKind.frost: 1, ObstacleKind.vine: 1},
     ),
     LevelDef(
       index: 4,
@@ -328,6 +340,8 @@ class Campaign {
         enrageAt: 0.4,
         themeColor: 0xFFFF4D6D,
       ),
+      // 两株毒藤让魔女的攻击更重，残血狂暴阶段会非常危险。
+      obstacles: {ObstacleKind.frost: 1, ObstacleKind.vine: 2},
     ),
     LevelDef(
       index: 5,
@@ -349,6 +363,8 @@ class Campaign {
         enrageAt: 0.35,
         themeColor: 0xFFB44BFF,
       ),
+      // 终战：一株毒藤压着吸血与狂暴的节奏，祭坛是留给玩家的怒气补给。
+      obstacles: {ObstacleKind.vine: 1, ObstacleKind.altar: 1},
     ),
   ];
 }

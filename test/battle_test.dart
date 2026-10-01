@@ -1,12 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gem_battle/engine/battle.dart';
 import 'package:gem_battle/engine/gem.dart';
 import 'package:gem_battle/engine/levels.dart';
 
-BattleState newBattle(int level) => BattleState(
-      def: Campaign.levels[level].enemy,
-      levelIndex: level,
-    );
+BattleState newBattle(int level) =>
+    BattleState(def: Campaign.levels[level].enemy, levelIndex: level);
 
 void main() {
   final def = Campaign.levels[0].enemy;
@@ -87,7 +87,11 @@ void main() {
 
     test('强化宝石额外伤害会单独结算', () {
       final state = newBattle(0);
-      final events = state.applyClear({GemType.red: 3}, combo: 1, specialBonus: 80);
+      final events = state.applyClear(
+        {GemType.red: 3},
+        combo: 1,
+        specialBonus: 80,
+      );
       expect(events.any((e) => e.kind == CombatEventKind.special), isTrue);
       expect(state.enemyHp, def.maxHp - 3 * Campaign.player.redDamage - 80);
     });
@@ -97,11 +101,29 @@ void main() {
       // 等于真正扣掉的血量。special 事件是"这一下有强化加成"的标记，
       // 它的数值已经包含在 playerDamage 里了，再累加一遍就会虚报。
       final state = newBattle(0);
-      final events = state.applyClear({GemType.red: 3}, combo: 1, specialBonus: 80);
+      final events = state.applyClear(
+        {GemType.red: 3},
+        combo: 1,
+        specialBonus: 80,
+      );
       final dealt = events
           .where((e) => e.kind == CombatEventKind.playerDamage)
           .fold<int>(0, (sum, e) => sum + e.amount);
       expect(dealt, def.maxHp - state.enemyHp);
+    });
+
+    test('击杀那一击只记实际扣掉的血，溢出的伤害不算数', () {
+      // 敌人只剩 10 血而这一下能打 104：事件与飘字该报 10。
+      // 若按"打出的伤害"上报，击杀时会凭空多出一大截，结算面板的总伤害
+      // 也随之虚高。
+      final state = newBattle(0);
+      state.enemyHp = 10;
+      final events = state.applyClear({GemType.red: 4}, combo: 1);
+      final dealt = events
+          .where((e) => e.kind == CombatEventKind.playerDamage)
+          .fold<int>(0, (sum, e) => sum + e.amount);
+      expect(dealt, 10);
+      expect(state.phase, BattlePhase.won);
     });
   });
 
@@ -114,13 +136,19 @@ void main() {
       expect(state.nextAttackIsHeavy, isTrue);
 
       final predicted = state.incomingDamage;
-      expect(predicted, (Campaign.player.maxHp * BattleState.singleHitCapRatio).round());
+      expect(
+        predicted,
+        (Campaign.player.maxHp * BattleState.singleHitCapRatio).round(),
+      );
 
       for (var i = 0; i < state.def.turnsPerAttack; i++) {
         state.endPlayerTurn();
       }
-      expect(Campaign.player.maxHp - state.playerHp, predicted,
-          reason: '预警写着多少，落下来就该是多少');
+      expect(
+        Campaign.player.maxHp - state.playerHp,
+        predicted,
+        reason: '预警写着多少，落下来就该是多少',
+      );
     });
 
     test('「硬化」减伤同样计入预警', () {
@@ -150,8 +178,11 @@ void main() {
 
       for (var i = 0; i < def.turnsPerAttack - 1; i++) {
         final events = state.endPlayerTurn();
-        expect(events.any((e) => e.kind == CombatEventKind.enemyAttack), isFalse,
-            reason: '还没到出手回合');
+        expect(
+          events.any((e) => e.kind == CombatEventKind.enemyAttack),
+          isFalse,
+          reason: '还没到出手回合',
+        );
         expect(state.playerHp, Campaign.player.maxHp);
       }
 
@@ -191,7 +222,9 @@ void main() {
       for (var round = 0; round < heavyDef.turnsPerAttack * 3; round++) {
         final events = state.endPlayerTurn();
         for (final e in events) {
-          if (e.kind == CombatEventKind.enemyAttack && e.text == '重击') heavyHits++;
+          if (e.kind == CombatEventKind.enemyAttack && e.text == '重击') {
+            heavyHits++;
+          }
         }
       }
       expect(heavyHits, 1, reason: '三轮里应出现一次重击');
@@ -232,7 +265,8 @@ void main() {
       state.attackCount = bossDef.heavyEvery - 1; // 下一击是重击
       state.endPlayerTurn();
 
-      final cap = (Campaign.player.maxHp * BattleState.singleHitCapRatio).round();
+      final cap = (Campaign.player.maxHp * BattleState.singleHitCapRatio)
+          .round();
       final lost = Campaign.player.maxHp - state.playerHp + state.shield;
       expect(lost, lessThanOrEqualTo(cap));
       expect(state.playerHp, greaterThan(0), reason: '不该被一击打死');
@@ -250,8 +284,11 @@ void main() {
       state.applyClear({GemType.red: 3}, combo: 1);
       final damage = 3 * Campaign.player.redDamage;
       expect(state.enemyShield, 0, reason: '护盾应被打光');
-      expect(state.enemyHp, before - (damage - guardDef.shieldRegen),
-          reason: '这一击只有超出护盾的部分能打到血量');
+      expect(
+        state.enemyHp,
+        before - (damage - guardDef.shieldRegen),
+        reason: '这一击只有超出护盾的部分能打到血量',
+      );
     });
 
     test('狂暴会在血量低于阈值时触发', () {
@@ -260,7 +297,72 @@ void main() {
       expect(state.enraged, isFalse);
       state.applyClear({GemType.red: 200}, combo: 1);
       expect(state.enraged, isTrue);
-      expect(state.enemyHp / bossDef.maxHp, lessThanOrEqualTo(bossDef.enrageAt));
+      expect(
+        state.enemyHp / bossDef.maxHp,
+        lessThanOrEqualTo(bossDef.enrageAt),
+      );
+    });
+
+    test('狂暴后出手更快：间隔缩短一回合但不低于 2', () {
+      final bossDef = Campaign.levels[4].enemy;
+      expect(
+        bossDef.turnsPerAttack,
+        greaterThan(2),
+        reason: '这关要能看出提速，别选 2 回合的敌人',
+      );
+      final state = BattleState(def: bossDef, levelIndex: 4);
+      state.applyClear({GemType.red: 200}, combo: 1);
+      expect(state.enraged, isTrue);
+
+      for (var i = 0; i < bossDef.turnsPerAttack; i++) {
+        state.endPlayerTurn();
+      }
+      expect(
+        state.turnsToAttack,
+        math.max(2, bossDef.turnsPerAttack - 1),
+        reason: '狂暴后倒计时不再回到原本的间隔',
+      );
+    });
+
+    test('汲魂：命中时夺走怒气，但不会夺走玩家没有的', () {
+      // 第一关的鬼火就带汲魂，是玩家见到的第一个敌方机制。
+      final wispDef = Campaign.levels[0].enemy;
+      expect(wispDef.rageDrain, greaterThan(0), reason: '这一关必须带汲魂，否则用例失去意义');
+
+      final rich = BattleState(def: wispDef, levelIndex: 0)..rage = 30;
+      for (var i = 0; i < wispDef.turnsPerAttack; i++) {
+        rich.endPlayerTurn();
+      }
+      expect(rich.rage, 30 - wispDef.rageDrain);
+
+      final poor = BattleState(def: wispDef, levelIndex: 0)..rage = 3;
+      for (var i = 0; i < wispDef.turnsPerAttack; i++) {
+        poor.endPlayerTurn();
+      }
+      expect(poor.rage, 0, reason: '只夺走手里有的那几点');
+    });
+
+    test('禁疗：命中后治疗减半并挂上回合数，且逐回合递减', () {
+      final witchDef = Campaign.levels[3].enemy;
+      expect(witchDef.healBlockTurns, greaterThan(0), reason: '巫女必须带禁疗');
+
+      final state = BattleState(def: witchDef, levelIndex: 3);
+      expect(state.healBlockTurns, 0);
+      for (var i = 0; i < witchDef.turnsPerAttack; i++) {
+        state.endPlayerTurn();
+      }
+      expect(state.healBlockTurns, witchDef.healBlockTurns, reason: '命中后挂上禁疗');
+
+      // 禁疗期间治疗只剩一半。
+      final before = state.playerHp;
+      state.applyClear({GemType.green: 4}, combo: 1);
+      final full = 4 * Campaign.player.greenHeal;
+      expect(state.playerHp - before, full - (full * 0.5).round());
+
+      // 每过一个回合消耗一层（敌人下次出手会重新挂满）。
+      final turnsLeft = state.healBlockTurns;
+      state.endPlayerTurn();
+      expect(state.healBlockTurns, turnsLeft - 1);
     });
   });
 
@@ -271,7 +373,11 @@ void main() {
       expect(state.phase, BattlePhase.won);
       expect(state.isWon, isTrue);
       expect(state.enemyHp, 0);
-      expect(state.applyClear({GemType.red: 3}, combo: 1), isEmpty, reason: '结束后不再结算');
+      expect(
+        state.applyClear({GemType.red: 3}, combo: 1),
+        isEmpty,
+        reason: '结束后不再结算',
+      );
     });
 
     test('玩家生命归零判定失败', () {
@@ -312,7 +418,8 @@ void main() {
         multiplier: Campaign.player.ultimateMultiplier,
       );
       final expected =
-          (4 * Campaign.player.redDamage * Campaign.player.ultimateMultiplier).round();
+          (4 * Campaign.player.redDamage * Campaign.player.ultimateMultiplier)
+              .round();
       expect(before - state.enemyHp, expected);
     });
   });
@@ -325,15 +432,21 @@ void main() {
         expect(cur.maxHp, greaterThan(prev.maxHp), reason: '第 ${i + 1} 关血量应更高');
         final prevThreat = prev.attack / prev.turnsPerAttack;
         final curThreat = cur.attack / cur.turnsPerAttack;
-        expect(curThreat, greaterThanOrEqualTo(prevThreat),
-            reason: '第 ${i + 1} 关每回合威胁不应低于上一关');
+        expect(
+          curThreat,
+          greaterThanOrEqualTo(prevThreat),
+          reason: '第 ${i + 1} 关每回合威胁不应低于上一关',
+        );
       }
     });
 
     test('敌人出手间隔至少 2 回合，玩家总有反应余地', () {
       for (final level in Campaign.levels) {
-        expect(level.enemy.turnsPerAttack, greaterThanOrEqualTo(2),
-            reason: '${level.enemy.name} 出手太频繁');
+        expect(
+          level.enemy.turnsPerAttack,
+          greaterThanOrEqualTo(2),
+          reason: '${level.enemy.name} 出手太频繁',
+        );
       }
     });
 
@@ -342,8 +455,11 @@ void main() {
         final def = level.enemy;
         var raw = def.attack * def.heavyMultiplier * 1.5; // 最坏情况：狂暴重击
         final cap = Campaign.player.maxHp * BattleState.singleHitCapRatio;
-        expect(raw > cap ? cap : raw, lessThan(Campaign.player.maxHp.toDouble()),
-            reason: '${def.name} 的一击上限不应超过玩家满血');
+        expect(
+          raw > cap ? cap : raw,
+          lessThan(Campaign.player.maxHp.toDouble()),
+          reason: '${def.name} 的一击上限不应超过玩家满血',
+        );
       }
     });
   });

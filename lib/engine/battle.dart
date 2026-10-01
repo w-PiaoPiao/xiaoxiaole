@@ -107,10 +107,19 @@ class BattleState {
   /// 敌人已经出手的次数。
   int attackCount = 0;
 
-  bool enraged = false;
+  /// 棋盘上的毒藤数量：每株让敌人的攻击 +[vineAttackBonus]。
+  ///
+  /// 战斗层不认识棋盘，这个值由 GameScreen 在每个回合开始前从棋盘同步进来；
+  /// 毒藤被清掉后下一回合就会自动失效。
+  int vineCount = 0;
 
-  /// 玩家已经行动的回合数。
-  int turn = 0;
+  /// 每株毒藤给敌人的攻击加成。
+  static const double vineAttackBonus = 0.05;
+
+  /// 祭坛被破除时立刻塞给玩家的怒气（清障即收益）。
+  static const int altarRageReward = 20;
+
+  bool enraged = false;
 
   BattlePhase phase = BattlePhase.playing;
 
@@ -126,13 +135,13 @@ class BattleState {
     PlayerProfile? profile,
     int? playerHp,
     Random? rng,
-  })  : profile = profile ?? Campaign.player,
-        rng = rng ?? Random(),
-        // 不带 playerHp 时按**这一局的档案**满血开局：强化过的档案上限更高，
-        // 这里若写死 Campaign.player 就会在换关时把成长吞掉。
-        playerHp = playerHp ?? (profile ?? Campaign.player).maxHp,
-        enemyHp = def.maxHp,
-        turnsToAttack = def.turnsPerAttack;
+  }) : profile = profile ?? Campaign.player,
+       rng = rng ?? Random(),
+       // 不带 playerHp 时按**这一局的档案**满血开局：强化过的档案上限更高，
+       // 这里若写死 Campaign.player 就会在换关时把成长吞掉。
+       playerHp = playerHp ?? (profile ?? Campaign.player).maxHp,
+       enemyHp = def.maxHp,
+       turnsToAttack = def.turnsPerAttack;
 
   bool get isOver => phase != BattlePhase.playing;
 
@@ -146,8 +155,9 @@ class BattleState {
   RoguelikeEffects get fx => profile.effects;
 
   /// 释放必杀需要的怒气（「月华」会打折）。
-  int get ultimateCost =>
-      (profile.ultimateCost * fx.ultimateCostMul).round().clamp(1, profile.maxRage);
+  int get ultimateCost => (profile.ultimateCost * fx.ultimateCostMul)
+      .round()
+      .clamp(1, profile.maxRage);
 
   bool get rageReady => rage >= ultimateCost;
 
@@ -175,6 +185,8 @@ class BattleState {
   int _predictAttackDamage(bool isHeavy) {
     var raw = def.attack * (isHeavy ? def.heavyMultiplier : 1.0);
     if (enraged) raw *= 1.5;
+    // 毒藤：缠在棋盘上的藤蔓每一株都在给敌人加码，清掉才停。
+    if (vineCount > 0) raw *= 1 + vineCount * vineAttackBonus;
     if (profile.damageReduction > 0) raw *= 1 - profile.damageReduction;
     final cap = (profile.maxHp * singleHitCapRatio).round();
     if (raw > cap) raw = cap.toDouble();
@@ -192,8 +204,9 @@ class BattleState {
   /// 是否处于「逆境」（残血）。残血时「狂骨」类强化会提高伤害。
   bool get desperate => playerHpRatio < PlayerProfile.desperateThreshold;
 
-  double get _desperateMul =>
-      profile.desperateBonus > 0 && desperate ? 1 + profile.desperateBonus : 1.0;
+  double get _desperateMul => profile.desperateBonus > 0 && desperate
+      ? 1 + profile.desperateBonus
+      : 1.0;
 
   /// 掷一次暴击。返回伤害倍率（未暴击就是 1.0）。
   ///
@@ -224,15 +237,24 @@ class BattleState {
     final curseMul = 1 + profile.curseBonus * curseStacks;
     final desperateMul = _desperateMul;
     // 「处决者」：残血的敌人挨得更疼。
-    final executeMul = fx.executeThreshold > 0 && enemyHpRatio < fx.executeThreshold
+    final executeMul =
+        fx.executeThreshold > 0 && enemyHpRatio < fx.executeThreshold
         ? 1 + fx.executeBonus
         : 1.0;
 
     final reds = counts[GemType.red] ?? 0;
     if (reds > 0) {
       final crit = _rollCrit(events);
-      final raw = reds * profile.redDamage * comboMul * curseMul * multiplier *
-          desperateMul * executeMul * fx.damageMul * crit;
+      final raw =
+          reds *
+          profile.redDamage *
+          comboMul *
+          curseMul *
+          multiplier *
+          desperateMul *
+          executeMul *
+          fx.damageMul *
+          crit;
       final dealt = raw.round();
       _damageEnemy(dealt, events);
       // 「过量暴击」：这一下暴击溢出的力量，顺手结成了护盾。
@@ -242,12 +264,13 @@ class BattleState {
     }
 
     // 「瘟疫」：每一层易伤都让强化宝石打得更狠。
-    final bonus = (specialBonus *
-            multiplier *
-            profile.specialPower *
-            fx.damageMul *
-            (1 + fx.curseToSpecialPower * curseStacks))
-        .round();
+    final bonus =
+        (specialBonus *
+                multiplier *
+                profile.specialPower *
+                fx.damageMul *
+                (1 + fx.curseToSpecialPower * curseStacks))
+            .round();
     if (bonus > 0) {
       final crit = _rollCrit(events);
       _damageEnemy((bonus * crit).round(), events);
@@ -346,8 +369,13 @@ class BattleState {
       final before = enemyHp;
       enemyHp = max(0, enemyHp - remaining);
       dealt = before - enemyHp;
-      events.add(CombatEvent(CombatEventKind.playerDamage, remaining));
-      log.insert(0, '造成 $remaining 点伤害');
+      // 事件与日志都记「实际扣掉的血」：敌人残血时超出的那部分不算伤害，
+      // 否则 UI 的飘字与结算面板的「总伤害」会把溢出值算进去，击杀那一击
+      // 虚高一截（battle_test 里那条"等于实际掉血"的用例守的就是这条）。
+      if (dealt > 0) {
+        events.add(CombatEvent(CombatEventKind.playerDamage, dealt));
+        log.insert(0, '造成 $dealt 点伤害');
+      }
     }
 
     // 吸血只结算「真正扣掉的血量」，而且致命一击不会再回血——
@@ -358,7 +386,9 @@ class BattleState {
         final before = enemyHp;
         enemyHp = min(def.maxHp, enemyHp + drain);
         final actual = enemyHp - before;
-        if (actual > 0) events.add(CombatEvent(CombatEventKind.enemyDrain, actual));
+        if (actual > 0) {
+          events.add(CombatEvent(CombatEventKind.enemyDrain, actual));
+        }
       }
     }
 
@@ -398,10 +428,31 @@ class BattleState {
     // 必杀也吃暴击与逆境加成：攒了半天的怒气打出一次大数字，正是它该有的份量。
     final crit = _rollCrit(events);
     _damageEnemy(
-      (profile.ultimateBonusDamage * crit * _desperateMul * fx.damageMul).round(),
+      (profile.ultimateBonusDamage * crit * _desperateMul * fx.damageMul)
+          .round(),
       events,
     );
     return events;
+  }
+
+  // ------------------------------------------------------------ 道具支援
+
+  /// 祭坛被破除的奖励：直接蓄积怒气。返回实际涨上去的点数。
+  int grantRage(int amount) {
+    if (isOver) return 0;
+    return _addRage(amount);
+  }
+
+  /// 凝滞：把敌人的出手倒计时往后推。返回实际推迟的回合数。
+  ///
+  /// 倒计时已经满格时返回 0——那种情况下道具不该被消耗，UI 会拦下来。
+  int delayEnemyAttack([int turns = 1]) {
+    if (isOver) return 0;
+    final before = turnsToAttack;
+    turnsToAttack = min(def.turnsPerAttack, turnsToAttack + turns);
+    final actual = turnsToAttack - before;
+    if (actual > 0) log.insert(0, '敌方行动被延缓 $actual 回合');
+    return actual;
   }
 
   // ------------------------------------------------------------ 敌方回合
@@ -409,7 +460,6 @@ class BattleState {
   /// 玩家行动结束，推进敌方回合。
   List<CombatEvent> endPlayerTurn() {
     if (isOver) return const [];
-    turn++;
 
     final events = <CombatEvent>[];
 
@@ -418,20 +468,26 @@ class BattleState {
       final before = playerHp;
       playerHp = min(profile.maxHp, playerHp + profile.regenPerTurn);
       final actual = playerHp - before;
-      if (actual > 0) events.add(CombatEvent(CombatEventKind.heal, actual, '回春'));
+      if (actual > 0) {
+        events.add(CombatEvent(CombatEventKind.heal, actual, '回春'));
+      }
     }
 
     // 「月华」：每回合自动蓄怒，必杀从此变成常规手段而不是奢侈品。
     if (fx.ragePerTurn > 0 && playerHp > 0) {
       final actual = _addRage(fx.ragePerTurn);
-      if (actual > 0) events.add(CombatEvent(CombatEventKind.rage, actual, '月华'));
+      if (actual > 0) {
+        events.add(CombatEvent(CombatEventKind.rage, actual, '月华'));
+      }
     }
 
     // 「血契」：力量是拿自己的血换的，每回合先收利息再轮到敌人。
     // 这一下可以致死——那是选择它时就已经写好的代价。
     if (fx.selfDamagePerTurn > 0 && playerHp > 0) {
       playerHp = max(0, playerHp - fx.selfDamagePerTurn);
-      events.add(CombatEvent(CombatEventKind.selfBleed, fx.selfDamagePerTurn, '血契'));
+      events.add(
+        CombatEvent(CombatEventKind.selfBleed, fx.selfDamagePerTurn, '血契'),
+      );
       log.insert(0, '血契夺走了 ${fx.selfDamagePerTurn} 点生命');
       if (playerHp <= 0) {
         phase = BattlePhase.lost;
@@ -477,11 +533,9 @@ class BattleState {
     final loss = total - absorbed;
     playerHp = max(0, playerHp - loss);
     // 即使被护盾完全挡下也要产生事件，UI 需要播放挨打反馈。
-    events.add(CombatEvent(
-      CombatEventKind.enemyAttack,
-      total,
-      isHeavy ? '重击' : null,
-    ));
+    events.add(
+      CombatEvent(CombatEventKind.enemyAttack, total, isHeavy ? '重击' : null),
+    );
     if (absorbed > 0) {
       events.add(CombatEvent(CombatEventKind.playerShield, absorbed));
     }
@@ -494,8 +548,11 @@ class BattleState {
         _damageEnemy(reflected, events);
       }
     }
-    log.insert(0, '${def.name} ${isHeavy ? '重击' : '攻击'} · 受到 $total 点伤害'
-        '${absorbed > 0 ? '（护盾抵挡 $absorbed）' : ''}');
+    log.insert(
+      0,
+      '${def.name} ${isHeavy ? '重击' : '攻击'} · 受到 $total 点伤害'
+      '${absorbed > 0 ? '（护盾抵挡 $absorbed）' : ''}',
+    );
 
     if (def.healBlockTurns > 0) {
       healBlockTurns = max(healBlockTurns, def.healBlockTurns);
@@ -516,10 +573,14 @@ class BattleState {
       final before = enemyShield;
       enemyShield = min(def.maxHp ~/ 3, enemyShield + def.shieldRegen);
       final actual = enemyShield - before;
-      if (actual > 0) events.add(CombatEvent(CombatEventKind.enemyGuard, actual));
+      if (actual > 0) {
+        events.add(CombatEvent(CombatEventKind.enemyGuard, actual));
+      }
     }
 
-    turnsToAttack = enraged ? max(2, def.turnsPerAttack - 1) : def.turnsPerAttack;
+    turnsToAttack = enraged
+        ? max(2, def.turnsPerAttack - 1)
+        : def.turnsPerAttack;
 
     if (playerHp <= 0) {
       playerHp = 0;

@@ -38,8 +38,12 @@ class EnergyBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final v = value.clamp(0.0, 1.0);
-    final label = semanticLabel ??
-        [if (leading != null) leading, if (trailing != null) trailing].join(' ');
+    final label =
+        semanticLabel ??
+        [
+          if (leading != null) leading,
+          if (trailing != null) trailing,
+        ].join(' ');
     return Semantics(
       label: label.isEmpty ? null : label,
       // 条内的文字只作为朗读内容，不必再单独播报一遍。
@@ -374,11 +378,16 @@ class _ActionButtonState extends State<ActionButton> {
               borderRadius: BorderRadius.circular(14),
               gradient: LinearGradient(
                 colors: enabled
-                    ? [color.withValues(alpha: 0.95), color.withValues(alpha: 0.55)]
+                    ? [
+                        color.withValues(alpha: 0.95),
+                        color.withValues(alpha: 0.55),
+                      ]
                     : [Palette.panel, Palette.panel],
               ),
               border: Border.all(
-                color: enabled ? Colors.white.withValues(alpha: 0.85) : Palette.panelEdge,
+                color: enabled
+                    ? Colors.white.withValues(alpha: 0.85)
+                    : Palette.panelEdge,
                 width: enabled ? 1.6 : 1,
               ),
               boxShadow: enabled
@@ -451,7 +460,8 @@ class TurnPips extends StatefulWidget {
   State<TurnPips> createState() => _TurnPipsState();
 }
 
-class _TurnPipsState extends State<TurnPips> with SingleTickerProviderStateMixin {
+class _TurnPipsState extends State<TurnPips>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _pulse = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 700),
@@ -495,7 +505,9 @@ class _TurnPipsState extends State<TurnPips> with SingleTickerProviderStateMixin
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: i < left
-                    ? color.withValues(alpha: (widget.danger ? pulse : 0.95).clamp(0.0, 1.0))
+                    ? color.withValues(
+                        alpha: (widget.danger ? pulse : 0.95).clamp(0.0, 1.0),
+                      )
                     : color.withValues(alpha: 0.18),
                 border: Border.all(
                   color: color.withValues(alpha: i < left ? 0.7 : 0.35),

@@ -29,7 +29,8 @@ class MoveAdvisor {
     final lethal = battle.playerHp - battle.shield <= battle.incomingDamage;
     final finishing = battle.enemyHpRatio < 0.08;
     final threatened = battle.turnsToAttack <= 1;
-    final safe = battle.playerHpRatio > 0.6 && battle.shield > battle.incomingDamage;
+    final safe =
+        battle.playerHpRatio > 0.6 && battle.shield > battle.incomingDamage;
 
     MoveSuggestion? best;
 
@@ -52,7 +53,9 @@ class MoveAdvisor {
         final counts = <GemType, int>{};
         var bonus = 0;
         for (final step in steps) {
-          step.counts.forEach((type, n) => counts[type] = (counts[type] ?? 0) + n);
+          step.counts.forEach(
+            (type, n) => counts[type] = (counts[type] ?? 0) + n,
+          );
           bonus += step.specialBonus;
         }
 

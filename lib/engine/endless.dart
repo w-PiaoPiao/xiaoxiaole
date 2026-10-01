@@ -1,3 +1,4 @@
+import 'gem.dart';
 import 'levels.dart';
 
 /// 无尽模式：BOSS 按 6 个原型轮换登场，数值与能力随波次单调增强。
@@ -59,7 +60,7 @@ class EndlessRoster {
   static EnemyDef _shape(String id) {
     switch (id) {
       case 'wisp':
-        return EnemyDef(
+        return const EnemyDef(
           id: 'wisp',
           name: '迷雾鬼火',
           title: '窃魂的低语',
@@ -71,7 +72,7 @@ class EndlessRoster {
           themeColor: 0xFF57E0C8,
         );
       case 'guardian':
-        return EnemyDef(
+        return const EnemyDef(
           id: 'guardian',
           name: '石甲守卫',
           title: '沉默的门扉',
@@ -84,7 +85,7 @@ class EndlessRoster {
           themeColor: 0xFFE0A94A,
         );
       case 'assassin':
-        return EnemyDef(
+        return const EnemyDef(
           id: 'assassin',
           name: '影刃刺客',
           title: '无声的追猎者',
@@ -98,7 +99,7 @@ class EndlessRoster {
           themeColor: 0xFF9B7BE8,
         );
       case 'witch':
-        return EnemyDef(
+        return const EnemyDef(
           id: 'witch',
           name: '血月巫女',
           title: '织咒之人',
@@ -111,7 +112,7 @@ class EndlessRoster {
           themeColor: 0xFFE85A7A,
         );
       case 'enchantress':
-        return EnemyDef(
+        return const EnemyDef(
           id: 'enchantress',
           name: '深渊魔女',
           title: '契约的持有者',
@@ -126,7 +127,7 @@ class EndlessRoster {
         );
       case 'warlord':
       default:
-        return EnemyDef(
+        return const EnemyDef(
           id: 'warlord',
           name: '终焉之影',
           title: '吞噬一切的黑',
@@ -206,6 +207,35 @@ class EndlessRoster {
     );
   }
 
+  /// 第 [wave] 波（从 1 开始）的机关配置。
+  ///
+  /// 与精英词条同步：第 4 波起每 3 波多一件机关（冰封与毒藤交替），封顶
+  /// 4 件；毒藤最多 3 株（攻击加成 +15% 是设计上限）。祭坛从第 6 波起每
+  /// 3 波出现一次——那是留给玩家的怒气补给，和毒藤的压力对冲。
+  static Map<ObstacleKind, int> obstaclesFor(int wave) {
+    if (wave < 4) return const {};
+    final total = ((wave - 1) ~/ 3).clamp(0, 4);
+    var frost = 0;
+    var vine = 0;
+    for (var i = 0; i < total; i++) {
+      if (i.isEven) {
+        frost++;
+      } else {
+        vine++;
+      }
+    }
+    if (vine > 3) {
+      frost += vine - 3;
+      vine = 3;
+    }
+    final altar = wave >= 6 && wave % 3 == 0 ? 1 : 0;
+    return {
+      if (frost > 0) ObstacleKind.frost: frost,
+      if (vine > 0) ObstacleKind.vine: vine,
+      if (altar > 0) ObstacleKind.altar: altar,
+    };
+  }
+
   /// 第 [wave] 波（从 1 开始）的关卡包装，供开场卡 / 结算面板直接使用。
   static LevelDef levelFor(int wave) {
     return LevelDef(
@@ -213,6 +243,7 @@ class EndlessRoster {
       name: '第 $wave 波',
       subtitle: '无尽回廊',
       enemy: enemyFor(wave),
+      obstacles: obstaclesFor(wave),
     );
   }
 

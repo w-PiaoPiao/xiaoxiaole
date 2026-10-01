@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../engine/board.dart';
 import 'fx.dart';
 import 'gem_art.dart';
+import 'obstacle_art.dart';
 import 'palette.dart';
 import 'paint_utils.dart';
 
@@ -29,6 +30,9 @@ class BoardView extends StatefulWidget {
   /// 必杀瞄准模式：手指按住哪一格，就把整行整列的清除范围预览出来。
   final bool aimingUltimate;
 
+  /// 道具瞄准模式（锤子）：手指按住哪一格，就把那一格高亮成落点。
+  final bool itemTargeting;
+
   const BoardView({
     super.key,
     required this.board,
@@ -40,6 +44,7 @@ class BoardView extends StatefulWidget {
     this.hintA,
     this.hintB,
     this.aimingUltimate = false,
+    this.itemTargeting = false,
     this.enabled = true,
   });
 
@@ -60,7 +65,9 @@ class _BoardViewState extends State<BoardView> {
   int? _cellAt(Offset local, double cell) {
     final x = local.dx ~/ cell;
     final y = local.dy ~/ cell;
-    if (x < 0 || x >= BoardEngine.cols || y < 0 || y >= BoardEngine.rows) return null;
+    if (x < 0 || x >= BoardEngine.cols || y < 0 || y >= BoardEngine.rows) {
+      return null;
+    }
     return y * BoardEngine.cols + x;
   }
 
@@ -74,10 +81,12 @@ class _BoardViewState extends State<BoardView> {
     // 棋盘用独立的绘制信号（见 FxController.boardRepaint）：没有东西在动时
     // 它一帧都不重画。外层套 RepaintBoundary，这样战斗区那侧的逐帧重绘
     // 不会把棋盘一起拖下水。
-    widget.fx.boardPulse = widget.selected != null ||
+    widget.fx.boardPulse =
+        widget.selected != null ||
         widget.hintA != null ||
         widget.hintB != null ||
-        widget.aimingUltimate;
+        widget.aimingUltimate ||
+        widget.itemTargeting;
     return LayoutBuilder(
       builder: (context, constraints) {
         final side = math.min(constraints.maxWidth, constraints.maxHeight);
@@ -122,8 +131,8 @@ class _BoardViewState extends State<BoardView> {
                   onPanUpdate: (details) {
                     if (!widget.enabled) return;
                     // 瞄准时拖动只是在移动准星：跟着手指更新预览，
-                    // 不交换任何宝石（松手才落点）。
-                    if (widget.aimingUltimate) {
+                    // 不交换任何宝石（松手才落点）。必杀与道具共用这条路径。
+                    if (widget.aimingUltimate || widget.itemTargeting) {
                       _setPressed(_cellAt(details.localPosition, cell));
                       return;
                     }
@@ -134,13 +143,17 @@ class _BoardViewState extends State<BoardView> {
                     if (delta.distance < cell * 0.34) return;
                     final int target;
                     if (delta.dx.abs() > delta.dy.abs()) {
-                      final nx = from % BoardEngine.cols + (delta.dx > 0 ? 1 : -1);
+                      final nx =
+                          from % BoardEngine.cols + (delta.dx > 0 ? 1 : -1);
                       if (nx < 0 || nx >= BoardEngine.cols) return;
                       target = from + (delta.dx > 0 ? 1 : -1);
                     } else {
-                      final ny = from ~/ BoardEngine.cols + (delta.dy > 0 ? 1 : -1);
+                      final ny =
+                          from ~/ BoardEngine.cols + (delta.dy > 0 ? 1 : -1);
                       if (ny < 0 || ny >= BoardEngine.rows) return;
-                      target = from + (delta.dy > 0 ? BoardEngine.cols : -BoardEngine.cols);
+                      target =
+                          from +
+                          (delta.dy > 0 ? BoardEngine.cols : -BoardEngine.cols);
                     }
                     _dragFired = true;
                     _setPressed(null);
@@ -153,7 +166,8 @@ class _BoardViewState extends State<BoardView> {
                     _dragOrigin = null;
                     _setPressed(null);
                     // 拖动瞄准后松手即落点：比"拖到位再点一下"顺手得多。
-                    if (widget.aimingUltimate && aim != null) {
+                    if ((widget.aimingUltimate || widget.itemTargeting) &&
+                        aim != null) {
                       widget.onSelect(aim);
                     }
                   },
@@ -178,6 +192,7 @@ class _BoardViewState extends State<BoardView> {
                           hintA: widget.hintA,
                           hintB: widget.hintB,
                           aimingUltimate: widget.aimingUltimate,
+                          itemTargeting: widget.itemTargeting,
                         ),
                         size: Size(side, side),
                       ),
@@ -231,7 +246,12 @@ class _BoardBackdropPainter extends CustomPainter {
     final radius = Radius.circular(cell * 0.24);
     for (var y = 0; y < BoardEngine.rows; y++) {
       for (var x = 0; x < BoardEngine.cols; x++) {
-        final rect = Rect.fromLTWH(x * cell, y * cell, cell, cell).deflate(cell * 0.045);
+        final rect = Rect.fromLTWH(
+          x * cell,
+          y * cell,
+          cell,
+          cell,
+        ).deflate(cell * 0.045);
         final rr = RRect.fromRectAndRadius(rect, radius);
         canvas.drawRRect(rr, slotPaint);
         canvas.drawRRect(rr, slotEdge);
@@ -251,6 +271,7 @@ class _BoardPainter extends CustomPainter {
   final int? hintA;
   final int? hintB;
   final bool aimingUltimate;
+  final bool itemTargeting;
 
   /// 排序用的复用缓冲：每帧只是排序，不再分配新列表。
   final List<GemVisual> _sorted = [];
@@ -269,6 +290,7 @@ class _BoardPainter extends CustomPainter {
     required this.hintA,
     required this.hintB,
     this.aimingUltimate = false,
+    this.itemTargeting = false,
   }) : super(repaint: fx.boardRepaint);
 
   /// 单个格子的圆角矩形。
@@ -305,8 +327,9 @@ class _BoardPainter extends CustomPainter {
 
     // 选中的格子：亮金色描边
     final selectedIndex = selected;
-    final selectedGemId =
-        selectedIndex == null ? null : board.cells[selectedIndex]?.id;
+    final selectedGemId = selectedIndex == null
+        ? null
+        : board.cells[selectedIndex]?.id;
     if (selectedIndex != null) {
       final pulse = 0.5 + 0.5 * math.sin(fx.time * 7);
       canvas.drawRRect(
@@ -355,6 +378,7 @@ class _BoardPainter extends CustomPainter {
           id: gem.id,
           type: gem.type,
           special: gem.special,
+          obstacle: gem.obstacle,
           x: 0,
           y: 0,
           toX: 0,
@@ -372,12 +396,19 @@ class _BoardPainter extends CustomPainter {
         final cx = aim % BoardEngine.cols;
         final cy = aim ~/ BoardEngine.cols;
         final pulse = 0.5 + 0.5 * math.sin(fx.time * 8);
-        final fill = _fill..color = Palette.gold.withValues(alpha: 0.17 + 0.13 * pulse);
+        final fill = _fill
+          ..color = Palette.gold.withValues(alpha: 0.17 + 0.13 * pulse);
         for (var x = 0; x < BoardEngine.cols; x++) {
-          canvas.drawRRect(_cellRR(cell, board.index(x, cy), cell * 0.045), fill);
+          canvas.drawRRect(
+            _cellRR(cell, board.index(x, cy), cell * 0.045),
+            fill,
+          );
         }
         for (var y = 0; y < BoardEngine.rows; y++) {
-          canvas.drawRRect(_cellRR(cell, board.index(cx, y), cell * 0.045), fill);
+          canvas.drawRRect(
+            _cellRR(cell, board.index(cx, y), cell * 0.045),
+            fill,
+          );
         }
         // 十字的外沿描一圈亮金，落点那一格再加一层实心高亮。
         final edge = stroke
@@ -398,8 +429,16 @@ class _BoardPainter extends CustomPainter {
         }
         for (var y = 0; y < BoardEngine.rows; y++) {
           final rr = _cellRR(cell, board.index(cx, y), cell * 0.03);
-          canvas.drawLine(Offset(rr.left, rr.top), Offset(rr.left, rr.bottom), edge);
-          canvas.drawLine(Offset(rr.right, rr.top), Offset(rr.right, rr.bottom), edge);
+          canvas.drawLine(
+            Offset(rr.left, rr.top),
+            Offset(rr.left, rr.bottom),
+            edge,
+          );
+          canvas.drawLine(
+            Offset(rr.right, rr.top),
+            Offset(rr.right, rr.bottom),
+            edge,
+          );
         }
         canvas.drawRRect(
           _cellRR(cell, aim, cell * 0.02),
@@ -414,6 +453,44 @@ class _BoardPainter extends CustomPainter {
       }
     }
 
+    // 道具瞄准（锤子）：把落点画成一个"取景框"——整格高亮 + 四角短线，
+    // 一眼能看出"这一格会被点掉"。
+    if (itemTargeting) {
+      final aim = pressed ?? selected;
+      if (aim != null) {
+        final pulse = 0.5 + 0.5 * math.sin(fx.time * 8);
+        final cx = aim % BoardEngine.cols;
+        final cy = aim ~/ BoardEngine.cols;
+        canvas.drawRRect(
+          _cellRR(cell, aim, cell * 0.02),
+          _fill..color = Palette.gold.withValues(alpha: 0.20 + 0.14 * pulse),
+        );
+        final tick = Paint()
+          ..strokeWidth = cell * 0.055
+          ..strokeCap = StrokeCap.round
+          ..color = Palette.gold.withValues(alpha: 0.75 + 0.25 * pulse);
+        final pad = cell * 0.10;
+        final len = cell * 0.17;
+        final left = cx * cell + pad;
+        final right = (cx + 1) * cell - pad;
+        final top = cy * cell + pad;
+        final bottom = (cy + 1) * cell - pad;
+        for (final corner in const [
+          [Offset(1, 0), Offset(0, 1)],
+          [Offset(-1, 0), Offset(0, 1)],
+          [Offset(1, 0), Offset(0, -1)],
+          [Offset(-1, 0), Offset(0, -1)],
+        ]) {
+          final origin = Offset(
+            corner[0].dx > 0 ? left : right,
+            corner[1].dy > 0 ? top : bottom,
+          );
+          canvas.drawLine(origin, origin + corner[0] * len, tick);
+          canvas.drawLine(origin, origin + corner[1] * len, tick);
+        }
+      }
+    }
+
     // 建议落点：画在宝石之上，用金色边框 + 淡金底把两颗宝石整个框出来。
     // 画在下层时只露出格子边缘的一圈，在密集的棋盘上几乎看不见。
     if (!aimingUltimate && (hintA != null || hintB != null)) {
@@ -425,7 +502,12 @@ class _BoardPainter extends CustomPainter {
     // 正在消散的宝石
     for (final d in fx.dying) {
       final t = d.t;
-      final rect = Rect.fromLTWH(d.x * cell, d.y * cell, cell, cell).deflate(cell * 0.10);
+      final rect = Rect.fromLTWH(
+        d.x * cell,
+        d.y * cell,
+        cell,
+        cell,
+      ).deflate(cell * 0.10);
       GemArt.paint(
         canvas,
         rect,
@@ -441,7 +523,8 @@ class _BoardPainter extends CustomPainter {
     // 圆环与粒子：共用一个画笔，避免每个元素都 new 一个 Paint。
     final dot = Paint();
     for (final ring in fx.rings) {
-      final radius = ring.maxRadius * cell * Curves.easeOutCubic.transform(ring.t);
+      final radius =
+          ring.maxRadius * cell * Curves.easeOutCubic.transform(ring.t);
       canvas.drawCircle(
         Offset(ring.x * cell, ring.y * cell),
         radius,
@@ -488,7 +571,13 @@ class _BoardPainter extends CustomPainter {
   }
 
   /// 一格「建议落点」的高亮。
-  void _paintHint(Canvas canvas, double cell, Paint stroke, int? index, double pulse) {
+  void _paintHint(
+    Canvas canvas,
+    double cell,
+    Paint stroke,
+    int? index,
+    double pulse,
+  ) {
     if (index == null) return;
     final rr = _cellRR(cell, index, cell * 0.02);
     canvas.drawRRect(
@@ -515,20 +604,35 @@ class _BoardPainter extends CustomPainter {
   ///
   /// [lifted] 为 true 表示这颗正被选中：放大一点并抬起，让"选中了哪一颗"
   /// 在一屏密集的宝石里一眼可辨。
-  void _paintGem(Canvas canvas, double cell, double gx, double gy, GemVisual gem, {bool lifted = false}) {
+  void _paintGem(
+    Canvas canvas,
+    double cell,
+    double gx,
+    double gy,
+    GemVisual gem, {
+    bool lifted = false,
+  }) {
     final baseScale = gem.animateBirth && gem.birth < 1
         ? Curves.easeOutBack.transform(gem.birth).clamp(0.0, 1.4)
         : gem.scale;
     final breathe = lifted ? 1 + 0.02 * math.sin(fx.time * 7) : 1.0;
     final scale = baseScale * (lifted ? 1.12 * breathe : 1.0);
     final dy = lifted ? -0.035 : 0.0;
-    final rect = Rect.fromLTWH(gx * cell, (gy + dy) * cell, cell, cell).deflate(cell * 0.10);
+    final rect = Rect.fromLTWH(
+      gx * cell,
+      (gy + dy) * cell,
+      cell,
+      cell,
+    ).deflate(cell * 0.10);
 
     // 投影刻意不用 MaskFilter：每帧 64 颗宝石各一次模糊，在软件渲染的
     // 模拟器上会把帧率打到个位数，得不偿失。
     canvas.drawOval(
       Rect.fromCenter(
-        center: Offset(rect.center.dx, rect.bottom + cell * (lifted ? 0.085 : 0.035)),
+        center: Offset(
+          rect.center.dx,
+          rect.bottom + cell * (lifted ? 0.085 : 0.035),
+        ),
         width: rect.width * (lifted ? 0.78 : 0.70),
         height: rect.height * 0.16,
       ),
@@ -546,6 +650,13 @@ class _BoardPainter extends CustomPainter {
       spin: gem.spin,
       flash: gem.flash,
     );
+
+    // 机关画在宝石之上：冰壳、藤蔓、祭坛都是"盖住宝石"的东西，
+    // 位置与缩放跟随宝石（下落、选中抬起都一起动）。
+    final obstacle = gem.obstacle;
+    if (obstacle != null) {
+      ObstacleArt.paint(canvas, rect, obstacle, time: fx.time, scale: scale);
+    }
   }
 
   @override
@@ -555,6 +666,7 @@ class _BoardPainter extends CustomPainter {
       oldDelegate.hintA != hintA ||
       oldDelegate.hintB != hintB ||
       oldDelegate.aimingUltimate != aimingUltimate ||
+      oldDelegate.itemTargeting != itemTargeting ||
       oldDelegate.fx != fx ||
       oldDelegate.board != board;
 }

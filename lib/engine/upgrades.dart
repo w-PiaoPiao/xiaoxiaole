@@ -128,7 +128,8 @@ class UpgradePool {
       themeColor: 0xFFFF8A5C,
       maxStacks: 6,
       weight: 9,
-      apply: (p) => p.copyWith(critChance: (p.critChance + 0.08).clamp(0.0, 0.8)),
+      apply: (p) =>
+          p.copyWith(critChance: (p.critChance + 0.08).clamp(0.0, 0.8)),
     ),
     Upgrade(
       id: 'critDamage',
@@ -170,10 +171,8 @@ class UpgradePool {
       themeColor: 0xFF3FA8E8,
       maxStacks: 6,
       weight: 9,
-      apply: (p) => p.copyWith(
-        blueShield: p.blueShield + 6,
-        maxShield: p.maxShield + 50,
-      ),
+      apply: (p) =>
+          p.copyWith(blueShield: p.blueShield + 6, maxShield: p.maxShield + 50),
     ),
     Upgrade(
       id: 'harden',
@@ -183,10 +182,13 @@ class UpgradePool {
       themeColor: 0xFF5FC8FF,
       maxStacks: 4,
       weight: 6,
-      available: (p) => p.damageReduction < PlayerProfile.maxDamageReduction - 0.001,
+      available: (p) =>
+          p.damageReduction < PlayerProfile.maxDamageReduction - 0.001,
       apply: (p) => p.copyWith(
-        damageReduction: (p.damageReduction + 0.08)
-            .clamp(0.0, PlayerProfile.maxDamageReduction),
+        damageReduction: (p.damageReduction + 0.08).clamp(
+          0.0,
+          PlayerProfile.maxDamageReduction,
+        ),
       ),
     ),
     Upgrade(
@@ -300,7 +302,10 @@ class UpgradePool {
       available: (p) => p.greenHeal >= 30,
       apply: (p) => p.copyWith(
         effects: p.effects.copyWith(
-          healOverflowToShield: (p.effects.healOverflowToShield + 0.5).clamp(0.0, 1.0),
+          healOverflowToShield: (p.effects.healOverflowToShield + 0.5).clamp(
+            0.0,
+            1.0,
+          ),
         ),
       ),
     ),
@@ -335,6 +340,23 @@ class UpgradePool {
         effects: p.effects.copyWith(
           rageOverflowDamage: (p.effects.rageOverflowDamage + 3).clamp(0.0, 9),
         ),
+      ),
+    ),
+    Upgrade(
+      id: 'executioner',
+      name: '处决者',
+      desc: '敌人生命低于 35% 时，红宝石伤害 +60%',
+      icon: UpgradeIcon.crosshair,
+      themeColor: 0xFFFF6B4D,
+      rarity: UpgradeRarity.rare,
+      // 不给叠层：两层就把斩杀期变成 2.2 倍，残血反打的设计初衷会变成
+      // "谁先摸到残血谁赢"的单边碾压。
+      maxStacks: 1,
+      weight: 7,
+      // 需要红宝石伤害的铺垫，否则这张牌只是给一条本来就打不动的线锦上添花。
+      available: (p) => p.redDamage >= 40,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(executeThreshold: 0.35, executeBonus: 0.6),
       ),
     ),
 
@@ -456,7 +478,9 @@ class UpgradePool {
       available: (p) => p.comboCap >= 3.3,
       apply: (p) => p.copyWith(
         comboCap: 5.0,
-        effects: p.effects.copyWith(comboBaseBonus: p.effects.comboBaseBonus + 0.15),
+        effects: p.effects.copyWith(
+          comboBaseBonus: p.effects.comboBaseBonus + 0.15,
+        ),
       ),
     ),
     Upgrade(
@@ -551,7 +575,8 @@ class UpgradePool {
         picked.every((u) => u.rarity == UpgradeRarity.common)) {
       // 稀有池抽空（全叠满）时退到传说——"稀有以上"的承诺不能因为
       // 某一边抽空就落空，只要池里还剩任何质变牌就该发出来。
-      final fallback = _pickByRarity(candidates, UpgradeRarity.rare, rng) ??
+      final fallback =
+          _pickByRarity(candidates, UpgradeRarity.rare, rng) ??
           _pickByRarity(candidates, UpgradeRarity.legendary, rng);
       if (fallback != null) picked[picked.length - 1] = fallback;
     }
@@ -579,7 +604,10 @@ class UpgradePool {
     UpgradeRarity rarity,
     math.Random rng,
   ) {
-    final matches = [for (final u in pool) if (u.rarity == rarity) u];
+    final matches = [
+      for (final u in pool)
+        if (u.rarity == rarity) u,
+    ];
     if (matches.isEmpty) return null;
     final total = matches.fold<int>(0, (sum, u) => sum + u.weight);
     var ticket = rng.nextInt(total < 1 ? 1 : total);

@@ -30,23 +30,25 @@ void main() {
     final board = BoardEngine(seed: 7)..reset();
     final fx = FxController();
     addTearDown(fx.dispose);
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: SizedBox(
-            width: cell * BoardEngine.cols,
-            height: cell * BoardEngine.rows,
-            child: BoardView(
-              board: board,
-              fx: fx,
-              selected: null,
-              onSelect: (_) {},
-              onSwapRequest: (a, b) => swaps.add([a, b]),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: cell * BoardEngine.cols,
+              height: cell * BoardEngine.rows,
+              child: BoardView(
+                board: board,
+                fx: fx,
+                selected: null,
+                onSelect: (_) {},
+                onSwapRequest: (a, b) => swaps.add([a, b]),
+              ),
             ),
           ),
         ),
       ),
-    ));
+    );
     boardOrigin = tester.getTopLeft(find.byType(BoardView));
     return swaps;
   }
@@ -100,7 +102,7 @@ void main() {
   testWidgets('按住格子下缘向左拖，仍然判成横向交换', (tester) async {
     final swaps = await pumpBoard(tester);
     // 下标 17（第 3 行第 2 列），向左拖不会越出棋盘；按下点压在这一格下缘。
-    final start = Offset(cell * 1.5, cell * 2.5 + cell * 0.48);
+    const start = Offset(cell * 1.5, cell * 2.5 + cell * 0.48);
     await drag(tester, start, const Offset(-nudge, 0));
 
     expect(swaps, hasLength(1));
@@ -110,7 +112,11 @@ void main() {
   testWidgets('拖出棋盘边界时不发起交换', (tester) async {
     final swaps = await pumpBoard(tester);
     // 下标 0 在最左上角，向上拖没有可交换的目标。
-    await drag(tester, const Offset(cell * 0.5, cell * 0.5), const Offset(0, -nudge));
+    await drag(
+      tester,
+      const Offset(cell * 0.5, cell * 0.5),
+      const Offset(0, -nudge),
+    );
 
     expect(swaps, isEmpty);
   });

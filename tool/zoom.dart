@@ -11,7 +11,10 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-const _src = String.fromEnvironment('SRC', defaultValue: 'build/ui_preview/13_max_text.png');
+const _src = String.fromEnvironment(
+  'SRC',
+  defaultValue: 'build/ui_preview/13_max_text.png',
+);
 const _x = int.fromEnvironment('X', defaultValue: 0);
 const _y = int.fromEnvironment('Y', defaultValue: 0);
 const _w = int.fromEnvironment('W', defaultValue: 200);
@@ -30,19 +33,29 @@ void main() {
       final canvas = Canvas(recorder);
       canvas.drawImageRect(
         image,
-        Rect.fromLTWH(_x.toDouble(), _y.toDouble(), _w.toDouble(), _h.toDouble()),
+        Rect.fromLTWH(
+          _x.toDouble(),
+          _y.toDouble(),
+          _w.toDouble(),
+          _h.toDouble(),
+        ),
         Rect.fromLTWH(0, 0, (_w * _zoom).toDouble(), (_h * _zoom).toDouble()),
         Paint()..filterQuality = FilterQuality.none,
       );
       final picture = recorder.endRecording();
-      final out = await picture.toImage((_w * _zoom).round(), (_h * _zoom).round());
+      final out = await picture.toImage(
+        (_w * _zoom).round(),
+        (_h * _zoom).round(),
+      );
       final png = await out.toByteData(format: ui.ImageByteFormat.png);
       final file = File('build/ui_preview/zoom.png');
       file.parent.createSync(recursive: true);
       file.writeAsBytesSync(png!.buffer.asUint8List());
       // ignore: avoid_print
-      print('已生成 build/ui_preview/zoom.png  '
-          '源图 ${image.width}x${image.height}  区域 ($_x,$_y,$_w,$_h) x$_zoom');
+      print(
+        '已生成 build/ui_preview/zoom.png  '
+        '源图 ${image.width}x${image.height}  区域 ($_x,$_y,$_w,$_h) x$_zoom',
+      );
     });
   });
 }

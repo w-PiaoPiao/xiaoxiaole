@@ -86,7 +86,8 @@ Future<void> _shot(
       ),
     ),
   );
-  final boundary = key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+  final boundary =
+      key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
   await tester.runAsync(() async {
     final image = await boundary.toImage();
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -105,8 +106,7 @@ StrikeFx fxAt(
   required double t,
   double ny = 0.5,
   double power = 1.2,
-}) =>
-    StrikeFx(kind: kind, seed: seed, ny: ny, power: power)..t = t;
+}) => StrikeFx(kind: kind, seed: seed, ny: ny, power: power)..t = t;
 
 void main() {
   final cases = <String, List<StrikeFx>>{
@@ -145,7 +145,9 @@ void main() {
       'scene_sword',
       _PreviewPainter(
         withCharacter: true,
-        strikes: [fxAt(StrikeKind.sword, seed: 12, t: 0.55, ny: 0.52, power: 1.3)],
+        strikes: [
+          fxAt(StrikeKind.sword, seed: 12, t: 0.55, ny: 0.52, power: 1.3),
+        ],
       ),
       size: const Size(540, 310),
     );
@@ -154,7 +156,9 @@ void main() {
       'scene_lightning',
       _PreviewPainter(
         withCharacter: true,
-        strikes: [fxAt(StrikeKind.lightning, seed: 22, t: 0.45, ny: 0.5, power: 1.3)],
+        strikes: [
+          fxAt(StrikeKind.lightning, seed: 22, t: 0.45, ny: 0.5, power: 1.3),
+        ],
       ),
       size: const Size(540, 310),
     );

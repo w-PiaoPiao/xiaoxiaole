@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -33,6 +34,9 @@ class AppSettings extends ChangeNotifier {
   /// 强化层数的合法上限：挡住损坏存档里"叠 10 万层"这类数值。
   static const int _maxUpgradeStacks = 99;
 
+  /// 道具库存的合法上限：挡住损坏存档里"带 99 个锤子"这类数值。
+  static const int _maxItemCount = 9;
+
   SharedPreferences? _prefs;
 
   bool _sound = true;
@@ -66,7 +70,8 @@ class AppSettings extends ChangeNotifier {
   bool isUnlocked(int levelIndex) => levelIndex <= _unlockedLevel;
 
   /// 是否已经通关过至少一关（用来决定要不要展示关卡选择）。
-  bool get hasProgress => _unlockedLevel > 0 || bestStars.isNotEmpty || _endlessBest > 0;
+  bool get hasProgress =>
+      _unlockedLevel > 0 || bestStars.isNotEmpty || _endlessBest > 0;
 
   Future<void> load() async {
     try {
@@ -129,8 +134,24 @@ class AppSettings extends ChangeNotifier {
     final out = <String, int>{};
     if (raw is Map) {
       raw.forEach((key, value) {
-        if (key is! String || key.isEmpty || value is! int || value <= 0) return;
+        if (key is! String || key.isEmpty || value is! int || value <= 0) {
+          return;
+        }
         out[key] = value.clamp(1, _maxUpgradeStacks);
+      });
+    }
+    return out;
+  }
+
+  /// 把「道具 id → 数量」洗成可用的形式：非法条目直接丢弃。
+  static Map<String, int> _sanitizeItems(Object? raw) {
+    final out = <String, int>{};
+    if (raw is Map) {
+      raw.forEach((key, value) {
+        if (key is! String || key.isEmpty || value is! int || value <= 0) {
+          return;
+        }
+        out[key] = value.clamp(1, _maxItemCount);
       });
     }
     return out;
@@ -148,10 +169,14 @@ class AppSettings extends ChangeNotifier {
           if (level is int && level >= 0) {
             final hp = decoded['hp'];
             return ResumeData(
-              mode: decoded['mode'] == 'endless' ? GameMode.endless : GameMode.campaign,
+              mode: decoded['mode'] == 'endless'
+                  ? GameMode.endless
+                  : GameMode.campaign,
               level: level,
               carryHp: hp is int ? _nonNegative(hp) : 0,
               upgrades: _sanitizeUpgrades(decoded['upgrades']),
+              // 旧存档没有 items 键：当作空库存，开局时按默认发放。
+              items: _sanitizeItems(decoded['items']),
             );
           }
         }
@@ -192,7 +217,7 @@ class AppSettings extends ChangeNotifier {
     final p = _prefs;
     if (p == null) return;
     try {
-      write(p).catchError((Object _) {});
+      unawaited(write(p).catchError((Object _) {}));
     } catch (_) {}
   }
 
@@ -230,7 +255,12 @@ class AppSettings extends ChangeNotifier {
   }
 
   /// 通关一关：解锁下一关并记录最佳战绩。
-  void recordClear({required int levelIndex, required int stars, required int turns, required int levelCount}) {
+  void recordClear({
+    required int levelIndex,
+    required int stars,
+    required int turns,
+    required int levelCount,
+  }) {
     var changed = false;
     if (stars > (bestStars[levelIndex] ?? 0)) {
       bestStars[levelIndex] = stars;
@@ -271,6 +301,7 @@ class AppSettings extends ChangeNotifier {
           'level': data.level,
           'hp': data.carryHp,
           'upgrades': data.upgrades,
+          'items': data.items,
         }),
       );
       await _removeLegacyResumeKeys(p);
@@ -328,10 +359,15 @@ class ResumeData {
   /// 本局已拿的强化（id → 层数）。
   final Map<String, int> upgrades;
 
+  /// 本局剩余的道具（道具 id → 数量）。旧存档缺这一项时按空处理，
+  /// 开局会按默认数量补足。
+  final Map<String, int> items;
+
   const ResumeData({
     required this.mode,
     required this.level,
     required this.carryHp,
     required this.upgrades,
+    this.items = const {},
   });
 }

@@ -93,7 +93,8 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                                   sfx: widget.sfx,
                                   mode: resume.mode,
                                   resume: resume,
-                                  onExitToMenu: () => Navigator.of(context).pop(),
+                                  onExitToMenu: () =>
+                                      Navigator.of(context).pop(),
                                 ),
                               ),
                             ),
@@ -196,10 +197,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
         child: Container(
           color: Colors.black.withValues(alpha: 0.80),
           child: Center(
-            child: GestureDetector(
-              onTap: () {},
-              child: child,
-            ),
+            child: GestureDetector(onTap: () {}, child: child),
           ),
         ),
       ),
@@ -224,7 +222,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: Palette.panelEdge),
           boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 30),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.5),
+              blurRadius: 30,
+            ),
           ],
         ),
         child: Column(
@@ -235,7 +236,9 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
               children: [
                 Text('设置', style: AppText.title.copyWith(fontSize: 20)),
                 const Spacer(),
-                PanelCloseButton(onTap: () => setState(() => _showSettings = false)),
+                PanelCloseButton(
+                  onTap: () => setState(() => _showSettings = false),
+                ),
               ],
             ),
             const SizedBox(height: 14),
@@ -310,7 +313,7 @@ class _Backdrop extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(painter: _BackdropPainter());
+    return const CustomPaint(painter: _BackdropPainter());
   }
 }
 
@@ -338,7 +341,7 @@ class _BackdropPainter extends CustomPainter {
     // 一圈漂浮的宝石：位置由固定公式给出（不随机），每次进入界面都一样。
     // 只落在左右两条边缘带与上下边缘——中央是标题与按钮的区域，
     // 被一颗宝石压住标题字比没有装饰更难看。
-    final gems = GemType.values;
+    const gems = GemType.values;
     for (var i = 0; i < 14; i++) {
       final r1 = (i * 0.618) % 1;
       final band = i % 3;
@@ -347,8 +350,11 @@ class _BackdropPainter extends CustomPainter {
         1 => size.width * (0.86 + 0.09 * r1),
         _ => size.width * (0.20 + 0.60 * r1),
       };
-      final y = size.height *
-          (band == 2 ? (i.isEven ? 0.03 + 0.06 * r1 : 0.90 + 0.06 * r1) : 0.04 + 0.92 * ((i * 0.382) % 1));
+      final y =
+          size.height *
+          (band == 2
+              ? (i.isEven ? 0.03 + 0.06 * r1 : 0.90 + 0.06 * r1)
+              : 0.04 + 0.92 * ((i * 0.382) % 1));
       final s = 14.0 + 22.0 * ((i * 0.777) % 1);
       canvas.save();
       canvas.translate(x, y);
@@ -393,7 +399,11 @@ class _TitleBlock extends StatelessWidget {
                   for (final type in GemType.values)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: _GemBadge(type: type, size: badge, special: SpecialKind.none),
+                      child: _GemBadge(
+                        type: type,
+                        size: badge,
+                        special: SpecialKind.none,
+                      ),
                     ),
                 ],
               ),
@@ -434,7 +444,11 @@ class _GemBadge extends StatelessWidget {
   final SpecialKind special;
   final double size;
 
-  const _GemBadge({required this.type, required this.special, required this.size});
+  const _GemBadge({
+    required this.type,
+    required this.special,
+    required this.size,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -505,7 +519,9 @@ class _MenuTile extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(15),
             gradient: primary
-                ? const LinearGradient(colors: [Palette.gold, Color(0xFFC98A33)])
+                ? const LinearGradient(
+                    colors: [Palette.gold, Color(0xFFC98A33)],
+                  )
                 : null,
             color: primary ? null : Palette.panel.withValues(alpha: 0.85),
             border: Border.all(
@@ -513,7 +529,12 @@ class _MenuTile extends StatelessWidget {
               width: primary ? 1.4 : 1,
             ),
             boxShadow: primary
-                ? [BoxShadow(color: Palette.gold.withValues(alpha: 0.30), blurRadius: 22)]
+                ? [
+                    BoxShadow(
+                      color: Palette.gold.withValues(alpha: 0.30),
+                      blurRadius: 22,
+                    ),
+                  ]
                 : null,
           ),
           child: Row(
@@ -526,7 +547,9 @@ class _MenuTile extends StatelessWidget {
                       label,
                       style: AppText.button.copyWith(
                         fontSize: compact ? 14.5 : 17,
-                        color: primary ? const Color(0xFF2A1600) : Palette.textPrimary,
+                        color: primary
+                            ? const Color(0xFF2A1600)
+                            : Palette.textPrimary,
                         letterSpacing: 2,
                       ),
                     ),

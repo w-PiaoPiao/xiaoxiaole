@@ -23,3 +23,6 @@ android/key.properties
 
 # 构建辅助产物
 *.log
+
+# 开发工具的工作目录（ZCode 的会话计划等）
+.zcode/

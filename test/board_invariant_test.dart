@@ -46,7 +46,10 @@ void main() {
       const advisor = MoveAdvisor();
       for (var seed = 1; seed <= 6; seed++) {
         final board = BoardEngine(seed: seed)..reset();
-        final battle = BattleState(def: Campaign.levels[0].enemy, levelIndex: 0);
+        final battle = BattleState(
+          def: Campaign.levels[0].enemy,
+          levelIndex: 0,
+        );
         expect(board.countHoles(), 0, reason: 'seed=$seed 初始棋盘就不完整');
 
         for (var move = 0; move < 60 && !battle.isOver; move++) {
@@ -59,20 +62,33 @@ void main() {
           board.swapCells(suggestion.a, suggestion.b);
           final steps = board.resolveSwap(suggestion.a, suggestion.b);
           for (final step in steps) {
-            expect(board.countHoles(), 0,
-                reason: 'seed=$seed move=$move combo=${step.combo} 结算后出现空洞');
-            expect(step.snapshot.length, 64,
-                reason: 'seed=$seed move=$move 快照不完整');
+            expect(
+              board.countHoles(),
+              0,
+              reason: 'seed=$seed move=$move combo=${step.combo} 结算后出现空洞',
+            );
+            expect(
+              step.snapshot.length,
+              64,
+              reason: 'seed=$seed move=$move 快照不完整',
+            );
           }
           for (final step in steps) {
-            battle.applyClear(step.counts, combo: step.combo, specialBonus: step.specialBonus);
+            battle.applyClear(
+              step.counts,
+              combo: step.combo,
+              specialBonus: step.specialBonus,
+            );
           }
           if (battle.canCastUltimate) {
             battle.castUltimate();
             final ultimateSteps = board.resolveUltimate(board.index(4, 4));
             expect(ultimateSteps, isNotEmpty);
-            expect(board.countHoles(), 0,
-                reason: 'seed=$seed move=$move 必杀结算后出现空洞');
+            expect(
+              board.countHoles(),
+              0,
+              reason: 'seed=$seed move=$move 必杀结算后出现空洞',
+            );
           }
           battle.endPlayerTurn();
         }
@@ -83,7 +99,10 @@ void main() {
       const advisor = MoveAdvisor();
       for (var seed = 1; seed <= 8; seed++) {
         final board = BoardEngine(seed: seed)..reset();
-        final battle = BattleState(def: Campaign.levels[1].enemy, levelIndex: 1);
+        final battle = BattleState(
+          def: Campaign.levels[1].enemy,
+          levelIndex: 1,
+        );
         for (var move = 0; move < 120 && !battle.isOver; move++) {
           final suggestion = advisor.suggest(board, battle);
           if (suggestion == null) {
@@ -97,19 +116,33 @@ void main() {
             expect(snapshot.length, 64);
             final byIndex = <int, int>{};
             for (final cell in snapshot) {
-              expect(byIndex.containsKey(cell.index), isFalse,
-                  reason: '快照里同一格出现两次: ${cell.index}');
+              expect(
+                byIndex.containsKey(cell.index),
+                isFalse,
+                reason: '快照里同一格出现两次: ${cell.index}',
+              );
               byIndex[cell.index] = cell.gemId;
             }
             for (var i = 0; i < board.cells.length; i++) {
               final gem = board.cells[i];
-              expect(gem, isNotNull, reason: 'seed=$seed move=$move 引擎第 $i 格为空');
-              expect(byIndex[i], gem!.id,
-                  reason: 'seed=$seed move=$move 第 $i 格快照 id 与引擎不一致');
+              expect(
+                gem,
+                isNotNull,
+                reason: 'seed=$seed move=$move 引擎第 $i 格为空',
+              );
+              expect(
+                byIndex[i],
+                gem!.id,
+                reason: 'seed=$seed move=$move 第 $i 格快照 id 与引擎不一致',
+              );
             }
           }
           for (final step in steps) {
-            battle.applyClear(step.counts, combo: step.combo, specialBonus: step.specialBonus);
+            battle.applyClear(
+              step.counts,
+              combo: step.combo,
+              specialBonus: step.specialBonus,
+            );
           }
           if (battle.canCastUltimate) {
             battle.castUltimate();
@@ -117,13 +150,20 @@ void main() {
             for (final step in ultimateSteps) {
               expect(step.snapshot.length, 64);
             }
-            expect(board.countHoles(), 0, reason: 'seed=$seed move=$move 必杀后出现空洞');
+            expect(
+              board.countHoles(),
+              0,
+              reason: 'seed=$seed move=$move 必杀后出现空洞',
+            );
             // 快照与引擎逐格比对
             final last = ultimateSteps.last.snapshot;
             final byIndex = {for (final c in last) c.index: c.gemId};
             for (var i = 0; i < 64; i++) {
-              expect(byIndex[i], board.cells[i]?.id,
-                  reason: 'seed=$seed move=$move 必杀后第 $i 格不一致');
+              expect(
+                byIndex[i],
+                board.cells[i]?.id,
+                reason: 'seed=$seed move=$move 必杀后第 $i 格不一致',
+              );
             }
           }
           battle.endPlayerTurn();
@@ -135,7 +175,10 @@ void main() {
       const advisor = MoveAdvisor();
       for (var seed = 1; seed <= 4; seed++) {
         final board = BoardEngine(seed: seed)..reset();
-        final battle = BattleState(def: Campaign.levels[0].enemy, levelIndex: 0);
+        final battle = BattleState(
+          def: Campaign.levels[0].enemy,
+          levelIndex: 0,
+        );
         final fx = FxController();
 
         // 开局：所有宝石从上方落入
@@ -167,15 +210,24 @@ void main() {
               spawnStartY: step.spawnStartY,
               fallDuration: 0.30,
             );
-            for (final step2 in steps) {
-              battle.applyClear(step2.counts, combo: step2.combo, specialBonus: step2.specialBonus);
-            }
+            // 只结算当前这一步：早先这里误写成遍历整串 steps，
+            // 每步都把整条连锁重放一遍（steps² 次），战斗被提前打完，
+            // 用例真正覆盖的回合数远少于设计值。
+            battle.applyClear(
+              step.counts,
+              combo: step.combo,
+              specialBonus: step.specialBonus,
+            );
             advance(fx, seconds: 1.5);
 
             final engineCount = board.cells.length - board.countHoles();
-            expect(fx.gems.length, engineCount,
-                reason: 'seed=$seed move=$move combo=${step.combo} 视觉层 ${fx.gems.length} '
-                    '与引擎 $engineCount 不一致');
+            expect(
+              fx.gems.length,
+              engineCount,
+              reason:
+                  'seed=$seed move=$move combo=${step.combo} 视觉层 ${fx.gems.length} '
+                  '与引擎 $engineCount 不一致',
+            );
             expect(fx.dying, isEmpty, reason: 'seed=$seed move=$move 消散动画未结束');
           }
           battle.endPlayerTurn();

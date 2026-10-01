@@ -35,6 +35,9 @@ class MenuOverlay extends StatelessWidget {
   /// 无尽模式没有"关"，这句话交给调用方决定。
   final String restartLabel;
 
+  /// 「重开当前进度」按钮的文案。战役说「重开本关」，无尽说「重开本波」。
+  final String restartLevelLabel;
+
   /// 回到主菜单。空则不显示该按钮（预览 / 测试场景）。
   final VoidCallback? onExitToMenu;
 
@@ -51,6 +54,7 @@ class MenuOverlay extends StatelessWidget {
     this.showLevelSelect = true,
     this.modeLabel = '战役',
     this.restartLabel = '重开一局',
+    this.restartLevelLabel = '重开本关',
     this.onExitToMenu,
   });
 
@@ -66,7 +70,10 @@ class MenuOverlay extends StatelessWidget {
             child: GestureDetector(
               onTap: () {},
               child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
+                margin: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 32,
+                ),
                 constraints: const BoxConstraints(maxWidth: 420),
                 decoration: BoxDecoration(
                   color: Palette.panel,
@@ -87,7 +94,10 @@ class MenuOverlay extends StatelessWidget {
                     children: [
                       Row(
                         children: [
-                          Text('暂停', style: AppText.title.copyWith(fontSize: 20)),
+                          Text(
+                            '暂停',
+                            style: AppText.title.copyWith(fontSize: 20),
+                          ),
                           const SizedBox(width: 8),
                           Text(
                             modeLabel,
@@ -102,18 +112,18 @@ class MenuOverlay extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
                       if (taken.isNotEmpty) ...[
-                        Text('本局强化', style: AppText.label),
+                        const Text('本局强化', style: AppText.label),
                         const SizedBox(height: 8),
                         _buildList(),
                         const SizedBox(height: 20),
                       ],
                       if (showLevelSelect) ...[
-                        Text('选择关卡', style: AppText.label),
+                        const Text('选择关卡', style: AppText.label),
                         const SizedBox(height: 8),
                         _levelGrid(),
                         const SizedBox(height: 20),
                       ],
-                      Text('设置', style: AppText.label),
+                      const Text('设置', style: AppText.label),
                       const SizedBox(height: 6),
                       SettingsToggle(
                         label: '音效',
@@ -146,7 +156,10 @@ class MenuOverlay extends StatelessWidget {
                       Row(
                         children: [
                           Expanded(
-                            child: MenuButton(label: '重开本关', onTap: onRestartLevel),
+                            child: MenuButton(
+                              label: restartLevelLabel,
+                              onTap: onRestartLevel,
+                            ),
                           ),
                           const SizedBox(width: 10),
                           Expanded(
@@ -166,7 +179,10 @@ class MenuOverlay extends StatelessWidget {
                           if (onExitToMenu != null) ...[
                             const SizedBox(width: 10),
                             Expanded(
-                              child: MenuButton(label: '回到主菜单', onTap: onExitToMenu!),
+                              child: MenuButton(
+                                label: '回到主菜单',
+                                onTap: onExitToMenu!,
+                              ),
                             ),
                           ],
                         ],
@@ -250,12 +266,14 @@ class _UpgradeChip extends StatelessWidget {
             SizedBox(
               width: 20,
               height: 20,
-              child: CustomPaint(painter: _ChipGlyphPainter(upgrade.icon, color)),
+              child: CustomPaint(
+                painter: _ChipGlyphPainter(upgrade.icon, color),
+              ),
             ),
             const SizedBox(width: 7),
             Text(
               upgrade.name,
-              style: TextStyle(
+              style: const TextStyle(
                 color: Palette.textPrimary,
                 fontSize: 11.5,
                 fontWeight: FontWeight.w700,
