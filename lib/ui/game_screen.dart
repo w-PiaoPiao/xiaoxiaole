@@ -1205,6 +1205,21 @@ class _GameScreenState extends State<GameScreen>
     if (events.any((e) => e.kind == CombatEventKind.ultimate)) {
       fx.addFloat('斩月', Palette.gold, nx: 0.50, ny: 0.33, size: 40);
     }
+    // 打空一管血：这是和"打赢"同级的里程碑，演出必须明确区分——大字报
+    // 出第几形态 + 一记重震 + 白闪，血条同时从空回满（就是"它又站起来了"）。
+    for (final e in events) {
+      if (e.kind != CombatEventKind.phaseChange) continue;
+      fx.addFloat(
+        e.text ?? '第 ${e.amount} 形态',
+        Palette.danger,
+        nx: 0.50,
+        ny: 0.28,
+        size: 44,
+      );
+      fx.shakeBy(22);
+      if (fx.allowFlash) fx.enemyFlash = 1;
+      sfx.crit();
+    }
   }
 
   void _presentPlayerEvents(List<CombatEvent> events) {
@@ -1308,12 +1323,17 @@ class _GameScreenState extends State<GameScreen>
         children: [
           // 震屏：整块战斗区 + 棋盘跟着抖（遮罩层不抖，否则面板会跟着晃）。
           // 子树的绘制有各自的 RepaintBoundary，所以这里每帧只是更新一次
-          // 合成变换，不会把两边的绘制重新跑一遍；不震的时候连这层都不挂。
+          // 合成变换，不会把两边的绘制重新跑一遍。
+          //
+          // 这层 Transform 必须**恒定挂着**：一旦写成"不震的时候直接返回
+          // 子树"，每次震动结束（几乎每次消除都会有）widget 类型就从
+          // Transform 切回 Column，整棵子树被重建——血条的填充动画、回合
+          // 圆点的脉冲都会从 0 重播一遍，看起来就是每次移动都在"重刷"。
+          // offset 为 Offset.zero 时这层等于空操作。
           AnimatedBuilder(
             animation: fx,
-            builder: (context, child) => fx.shake <= 0.05
-                ? child!
-                : Transform.translate(offset: fx.shakeOffset, child: child),
+            builder: (context, child) =>
+                Transform.translate(offset: fx.shakeOffset, child: child),
             child: Column(
               children: [
                 Expanded(

@@ -123,16 +123,39 @@ class BattleView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        EnergyBar(
-          value: battle.enemyHpRatio,
-          shieldValue: shieldRatio,
-          color: Palette.hpEnemy,
-          height: 15,
-          trailing: '${battle.enemyHp}',
-          // 狂暴线：让"什么时候会变天"变成看得见的信息，而不是突然袭击。
-          markers: battle.def.enrages ? [battle.def.enrageAt] : const [],
-          semanticLabel:
-              '${battle.def.name} 生命 ${battle.enemyHp} / ${battle.def.maxHp}',
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: EnergyBar(
+                value: battle.enemyHpRatio,
+                shieldValue: shieldRatio,
+                color: Palette.hpEnemy,
+                height: 15,
+                trailing: '${battle.enemyHp}',
+                // 狂暴线：让"什么时候会变天"变成看得见的信息，而不是突然袭击。
+                markers: battle.def.enrages
+                    ? [battle.def.enrageAt]
+                    : const [],
+                semanticLabel: battle.def.hasPhases
+                    ? '${battle.def.name} 第 ${battle.phaseIndex} 形态、'
+                          '共 ${battle.def.phases} 形态，'
+                          '生命 ${battle.enemyHp} / ${battle.def.maxHp}'
+                    : '${battle.def.name} 生命 ${battle.enemyHp} / ${battle.def.maxHp}',
+              ),
+            ),
+            // 多管血：血条后面挂一个 ×N 徽标，N 是**剩余**管数（含正在打的
+            // 这一管）。打空一管时它立刻减 1、血条同时回满——玩家看到的是
+            // "又一管被打掉了"，而不是一条空血条在那里等人来填。
+            if (battle.phasesLeft > 1) ...[
+              const SizedBox(width: 6),
+              Tag(
+                text: '×${battle.phasesLeft}',
+                color: Palette.danger,
+                dense: true,
+              ),
+            ],
+          ],
         ),
         const SizedBox(height: 4),
         // 状态标签原本挂在标题行右侧，会和右上角的按钮抢位置；

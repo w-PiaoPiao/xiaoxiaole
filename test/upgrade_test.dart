@@ -422,8 +422,15 @@ void main() {
       expect(step.specialBonus, 200);
     });
 
-    test('单颗强化宝石依旧是各自引爆，不算组合', () {
-      final board = boardOf({a: 'Rh', b: 'Y.'});
+    test('单颗强化宝石换出消除时照常引爆，不算组合', () {
+      // (5,3)、(6,3) 涂红：破空落到 b=(4,3) 后与它们形成三连才会引爆
+      // （强化宝石现在也要换出消除）。只有一颗强化宝石参与，不算组合技。
+      final board = boardOf({
+        a: 'Rh',
+        b: 'B.',
+        BoardEngine.cols * 3 + 5: 'R.',
+        BoardEngine.cols * 3 + 6: 'R.',
+      });
       final step = swapAndResolve(board);
       // 交换后强化宝石落到 b，被它自己引爆。
       expect(step.activations.single.comboName, isNull);

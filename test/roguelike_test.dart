@@ -45,14 +45,14 @@ void main() {
   });
 
   group('稀有度与抽取', () {
-    test('稀有度分布：14 普通 + 10 稀有 + 3 传说', () {
+    test('稀有度分布：14 普通 + 12 稀有 + 4 传说', () {
       final byRarity = <UpgradeRarity, int>{};
       for (final u in UpgradePool.all) {
         byRarity[u.rarity] = (byRarity[u.rarity] ?? 0) + 1;
       }
       expect(byRarity[UpgradeRarity.common], 14);
-      expect(byRarity[UpgradeRarity.rare], 10);
-      expect(byRarity[UpgradeRarity.legendary], 3);
+      expect(byRarity[UpgradeRarity.rare], 12);
+      expect(byRarity[UpgradeRarity.legendary], 4);
     });
 
     test('新牌都标记了正确的稀有度', () {
@@ -475,23 +475,40 @@ void main() {
 
     test('爆破工程：爆裂宝石范围 3x3 → 5x5', () {
       // 交换后爆裂落在 b=(4,3)：5x5 覆盖 x∈[2,6]、y∈[1,5]。
-      final board = boardOf({a: 'Rb', b: 'Y.'});
+      // 用五彩底棋盘（本身就是无三连的稳定盘）而不是全黄底：强化宝石
+      // 现在要"换出消除"才引爆，第一步由匹配链产出，全黄底会到处是匹配。
+      // (5,3)、(6,3) 涂红是给爆裂落点后凑三连用的。
+      final layout = {
+        a: 'Rb',
+        b: 'Y.',
+        BoardEngine.cols * 3 + 5: 'R.',
+        BoardEngine.cols * 3 + 6: 'R.',
+      };
+      final board = boardOfMixed(layout);
       final cleared = clearedOf(board, a, b, const BoardRules(burstRadius: 2));
       expect(cleared.length, 25);
       expect(cleared.contains(BoardEngine.cols * 1 + 2), isTrue, reason: '左上角');
       expect(cleared.contains(BoardEngine.cols * 5 + 6), isTrue, reason: '右下角');
 
-      final plain = boardOf({a: 'Rb', b: 'Y.'});
+      final plain = boardOfMixed(layout);
       expect(
         clearedOf(plain, a, b, BoardRules.none).length,
-        9,
-        reason: '默认 3x3',
+        10,
+        reason: '默认 3x3，外加落在它外面的 (6,3)',
       );
     });
 
     test('十字破空：破空宝石同时清除整行与整列', () {
-      // 交换后破空落在 b=(4,3)：行 y=3 与列 x=4 一起清。
-      final board = boardOf({a: 'Rh', b: 'Y.'});
+      // 交换后破空落在 b=(4,3)：行 y=3 与列 x=4 一起清。(5,3)、(6,3) 涂红
+      // 让落点后形成三连（强化宝石现在也要换出消除才引爆）。三连整条都在
+      // 第 3 行里，不改变格子数。底棋盘用五彩盘，理由同爆破工程那条。
+      final layout = {
+        a: 'Rh',
+        b: 'Y.',
+        BoardEngine.cols * 3 + 5: 'R.',
+        BoardEngine.cols * 3 + 6: 'R.',
+      };
+      final board = boardOfMixed(layout);
       final cleared = clearedOf(
         board,
         a,
@@ -502,7 +519,7 @@ void main() {
       expect(cleared.contains(4), isTrue, reason: '第 4 列');
       expect(cleared.contains(BoardEngine.cols * 3), isTrue, reason: '第 3 行');
 
-      final plain = boardOf({a: 'Rh', b: 'Y.'});
+      final plain = boardOfMixed(layout);
       expect(
         clearedOf(plain, a, b, BoardRules.none).length,
         8,

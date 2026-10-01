@@ -144,17 +144,43 @@ class EndlessRoster {
     }
   }
 
+  /// 多形态：第 9 波起 3 管血、第 16 波起 4 管。
+  ///
+  /// 管数给得比战役更密（战役是 3~4 管）：无尽的血量本来就在指数上涨，
+  /// 每管必须压得足够小，玩家的一次连锁才能把血条打掉一大截。
+  /// 每管血量按 [_phaseHpFactor] 打折，总量与单管曲线持平或略高。
+  static int phasesFor(int wave) {
+    if (wave >= 16) return 4;
+    if (wave >= 9) return 3;
+    return 1;
+  }
+
+  /// 每管血量相对单管曲线的折扣。
+  ///
+  /// 总血量 = 每管 × 管数：3 管时约 1.0 倍、4 管时约 1.2 倍。多形态本身
+  /// 已经带来「溢出浪费 + 每管优势清零重来」的额外消耗，总血量再翻倍就
+  /// 没人跑得远了。
+  static const Map<int, double> _phaseHpFactor = {
+    1: 1.0,
+    2: 0.5,
+    3: 0.33,
+    4: 0.3,
+  };
+
   /// 生成第 [wave] 波（从 1 开始）的 BOSS。
   static EnemyDef enemyFor(int wave) {
     assert(wave >= 1);
     final shape = _shape(_order[(wave - 1) % _order.length]);
+    final phases = phasesFor(wave);
+    final hpFactor = _phaseHpFactor[phases] ?? 1.0;
     final def = EnemyDef(
       id: shape.id,
       name: '${_prefix(wave)}${shape.name}',
       title: shape.title,
       taunt: shape.taunt,
       archetype: shape.archetype,
-      maxHp: (_baseHp * _hpScale(wave - 1)).round(),
+      maxHp: (_baseHp * _hpScale(wave - 1) * hpFactor).round(),
+      phases: phases,
       attack: _baseAttack + attackGrowth * (wave - 1),
       turnsPerAttack: shape.turnsPerAttack,
       heavyEvery: shape.heavyEvery,
@@ -194,6 +220,7 @@ class EndlessRoster {
       taunt: def.taunt,
       archetype: def.archetype,
       maxHp: def.maxHp,
+      phases: def.phases,
       attack: def.attack,
       turnsPerAttack: def.turnsPerAttack,
       heavyEvery: def.heavyEvery,

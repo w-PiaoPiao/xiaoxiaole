@@ -61,6 +61,17 @@ class EnemyDef {
   /// 命中玩家时夺走的怒气（「汲魂」机制：打得越狠，必杀来得越慢）。
   final int rageDrain;
 
+  /// 血条管数（形态数）。1 = 单管，打空就结束。
+  ///
+  /// 多管血不是"血更多"的同义词：每打空一管，敌人满血进入下一形态，
+  /// 身上的易伤与护盾清零、出手倒计时重置，攻击还按 [phaseAttackGrowth]
+  /// 逐管变强——玩家每打空一管都要把优势重新建立一遍，这才是它带来的
+  /// 深度。总血量 = maxHp × phases。
+  final int phases;
+
+  /// 每进入下一形态，攻击力提升的比例（0.15 = 每管 +15%）。
+  final double phaseAttackGrowth;
+
   /// 章节配色（用于光效）。
   final int themeColor;
 
@@ -81,9 +92,17 @@ class EnemyDef {
     this.drainRatio = 0,
     this.enrageAt = 0,
     this.rageDrain = 0,
+    this.phases = 1,
+    this.phaseAttackGrowth = 0.15,
   });
 
   bool get enrages => enrageAt > 0;
+
+  /// 多形态敌人（打空一管还有下一管）。
+  bool get hasPhases => phases > 1;
+
+  /// 总血量：所有形态加起来。[maxHp] 是**每管**的血量。
+  int get totalHp => maxHp * phases;
 }
 
 /// 关卡定义：一个敌人 + 一句战场提示。
@@ -163,7 +182,11 @@ class PlayerProfile {
     this.redDamage = 26,
     this.blueShield = 13,
     this.greenHeal = 21,
-    this.yellowRage = 9,
+    // 每颗黄宝石的怒气。这个数字直接决定必杀「斩月」的出场频率：
+    // 9 点时推演里一局能放 4.7 次（每 2.75 回合就要"选斩月再选落点"
+    // 一次，节奏被打断得七零八落）；4 点时降到 2.3 次，必杀回到
+    // "攒出来的大招"该有的份量。改这个数请用 tool 里的推演口径复核。
+    this.yellowRage = 4,
     this.purpleCurse = 1,
     this.maxShield = 250,
     this.maxRage = 100,
@@ -332,7 +355,11 @@ class Campaign {
         title: '契约的持有者',
         taunt: '「把心交给我，我就不疼了。」',
         archetype: EnemyArchetype.enchantress,
-        maxHp: 6300,
+        // 三管血：魔女是第一个会"死而复生"的敌人，教玩家认识多形态——
+        // 打空一管不算赢，易伤清零、她更凶地站起来。每管刻意压小，
+        // 让一次布好的连锁就能打掉血条的一大截（消减要看得见）。
+        maxHp: 1870,
+        phases: 3,
         attack: 170,
         turnsPerAttack: 3,
         heavyEvery: 3,
@@ -353,7 +380,10 @@ class Campaign {
         title: '吞噬一切的黑',
         taunt: '「你打赢的一切，都会成为我的一部分。」',
         archetype: EnemyArchetype.warlord,
-        maxHp: 7400,
+        // 四管血的最终战：每打空一管都要重新铺易伤、重新排节奏，
+        // 而它每醒一次都更凶——终局的"终"是形态的四次递进。
+        maxHp: 1725,
+        phases: 4,
         attack: 158,
         turnsPerAttack: 2,
         heavyEvery: 3,

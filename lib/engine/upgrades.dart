@@ -272,6 +272,36 @@ class UpgradePool {
     // （见 [UpgradePool.roll] 的 roguelike 开关），并且大多需要先有对应的
     // build 铺垫才有资格被抽到——这让每一局的成长方向在中期就分岔了。
 
+    // ------------------------------------------------------ 稀有 · 生存型
+    // 多管血 BOSS 逐击变凶之后，"活下去"本身成了一条独立的成长路线：
+    // 这两张牌不和输出抢位置，专门把身板垫厚——总血量与总护盾是唯二
+    // 每次受击都要先挡在玩家前面的东西。
+    Upgrade(
+      id: 'mountainHeart',
+      name: '山岳之躯',
+      desc: '生命上限 +110（当场补满）',
+      icon: UpgradeIcon.heart,
+      themeColor: 0xFF7CE0B0,
+      rarity: UpgradeRarity.rare,
+      maxStacks: 2,
+      weight: 8,
+      apply: (p) => p.copyWith(maxHp: p.maxHp + 110),
+    ),
+    Upgrade(
+      id: 'aegisWall',
+      name: '圣盾壁垒',
+      desc: '护盾上限 +140，蓝宝石护盾 +4',
+      icon: UpgradeIcon.shield,
+      themeColor: 0xFF3FA8E8,
+      rarity: UpgradeRarity.rare,
+      maxStacks: 2,
+      weight: 8,
+      apply: (p) => p.copyWith(
+        maxShield: p.maxShield + 140,
+        blueShield: p.blueShield + 4,
+      ),
+    ),
+
     // ------------------------------------------------------ 稀有 · 联动型
     Upgrade(
       id: 'overcrit',
@@ -498,6 +528,24 @@ class UpgradePool {
           ultimateCostMul: 0.6,
           ragePerTurn: p.effects.ragePerTurn + 12,
         ),
+      ),
+    ),
+    Upgrade(
+      id: 'unbroken',
+      name: '不屈',
+      desc: '单次受到的伤害不超过最大生命的 40%',
+      icon: UpgradeIcon.cross,
+      themeColor: 0xFF5FC8FF,
+      rarity: UpgradeRarity.legendary,
+      maxStacks: 1,
+      weight: 6,
+      // 这是"不被一刀秒"的直接解：默认封顶是 65%（两击致死），压到 40%
+      // 之后至少能挨三下。要求先有一点生存投入——没有任何身板时它救不了
+      // 你，40% 照样打得动；它是一条生存路线的质变，不是通用的免死金牌。
+      available: (p) =>
+          p.maxHp >= 340 || p.maxShield >= 300 || p.damageReduction > 0.05,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(hitCapRatio: 0.4),
       ),
     ),
   ];

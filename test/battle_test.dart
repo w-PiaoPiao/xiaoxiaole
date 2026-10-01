@@ -251,6 +251,9 @@ void main() {
     test('吸血不会把被击杀的敌人救活', () {
       final drainDef = Campaign.levels[5].enemy;
       final state = BattleState(def: drainDef, levelIndex: 5);
+      // 终战是多形态 BOSS：这一条守的是"最后一管被打空"，
+      // 所以直接站到最后一管上，避免打着打着变成换形态。
+      state.phaseIndex = drainDef.phases;
       state.enemyHp = 10;
       state.applyClear({GemType.red: 4}, combo: 1);
       expect(state.phase, BattlePhase.won, reason: '致命一击吸血后不该复活');
@@ -295,7 +298,10 @@ void main() {
       final bossDef = Campaign.levels[4].enemy;
       final state = BattleState(def: bossDef, levelIndex: 4);
       expect(state.enraged, isFalse);
-      state.applyClear({GemType.red: 200}, combo: 1);
+      // 先把血压到阈值上方一线，再补一击越过它。直接打 200 颗红宝石会
+      // 打空整管——多形态的魔女会因此"换形态"，而不是"狂暴"。
+      state.enemyHp = (bossDef.maxHp * bossDef.enrageAt).round() + 1;
+      state.applyClear({GemType.red: 1}, combo: 1);
       expect(state.enraged, isTrue);
       expect(
         state.enemyHp / bossDef.maxHp,
@@ -311,7 +317,8 @@ void main() {
         reason: '这关要能看出提速，别选 2 回合的敌人',
       );
       final state = BattleState(def: bossDef, levelIndex: 4);
-      state.applyClear({GemType.red: 200}, combo: 1);
+      state.enemyHp = (bossDef.maxHp * bossDef.enrageAt).round() + 1;
+      state.applyClear({GemType.red: 1}, combo: 1);
       expect(state.enraged, isTrue);
 
       for (var i = 0; i < bossDef.turnsPerAttack; i++) {
@@ -429,7 +436,8 @@ void main() {
       for (var i = 1; i < Campaign.levels.length; i++) {
         final prev = Campaign.levels[i - 1].enemy;
         final cur = Campaign.levels[i].enemy;
-        expect(cur.maxHp, greaterThan(prev.maxHp), reason: '第 ${i + 1} 关血量应更高');
+        // 比总血量：多形态 BOSS 的 maxHp 只是"每管"，单看会比前一关小。
+        expect(cur.totalHp, greaterThan(prev.totalHp), reason: '第 ${i + 1} 关血量应更高');
         final prevThreat = prev.attack / prev.turnsPerAttack;
         final curThreat = cur.attack / cur.turnsPerAttack;
         expect(
@@ -461,6 +469,93 @@ void main() {
           reason: '${def.name} 的一击上限不应超过玩家满血',
         );
       }
+    });
+  });
+
+  group('多管血 BOSS', () {
+    const twoPhase = EnemyDef(
+      id: 'test_boss',
+      name: '试炼之影',
+      title: '两管血',
+      taunt: '「再来一次。」',
+      archetype: EnemyArchetype.warlord,
+      maxHp: 1000,
+      phases: 2,
+      attack: 100,
+      turnsPerAttack: 3,
+      themeColor: 0xFFB44BFF,
+    );
+
+    BattleState phaseBattle() => BattleState(def: twoPhase, levelIndex: 0);
+
+    test('总血量按管数累加', () {
+      expect(twoPhase.totalHp, 2000);
+      expect(twoPhase.hasPhases, isTrue);
+      expect(Campaign.levels.first.enemy.hasPhases, isFalse, reason: '单管敌人不受影响');
+    });
+
+    test('打空一管不判胜，而是满血进入下一形态', () {
+      final state = phaseBattle();
+      state.applyClear({GemType.purple: 6}, combo: 1); // 先铺满易伤
+      expect(state.curseStacks, greaterThan(0));
+
+      state.enemyHp = 10; // 只剩一丝血，下一击必破
+      final events = state.applyClear({GemType.red: 3}, combo: 1);
+
+      expect(state.isWon, isFalse, reason: '还有下一管，不算赢');
+      expect(state.phaseIndex, 2);
+      expect(state.enemyHp, twoPhase.maxHp, reason: '下一管从头满血');
+      expect(state.curseStacks, 0, reason: '易伤清零：优势要重新建立');
+      expect(
+        state.turnsToAttack,
+        twoPhase.turnsPerAttack,
+        reason: '换形态给一个完整回合的喘息',
+      );
+      expect(
+        events.map((e) => e.kind),
+        contains(CombatEventKind.phaseChange),
+        reason: 'UI 靠这条事件播转形态演出，不能只在日志里写',
+      );
+    });
+
+    test('溢出的伤害不带入下一管', () {
+      final state = phaseBattle();
+      state.enemyHp = 10;
+      // 这一击远超 10 点：多余的力量不会打到下一管身上。
+      state.applyClear({GemType.red: 20}, combo: 1);
+      expect(
+        state.enemyHp,
+        twoPhase.maxHp,
+        reason: '否则一次攒好的爆发能连穿两三管，多形态的节奏全没了',
+      );
+    });
+
+    test('最后一管打空才判胜', () {
+      final state = phaseBattle();
+      state.phaseIndex = 2;
+      state.enemyHp = 10;
+      state.applyClear({GemType.red: 3}, combo: 1);
+      expect(state.isWon, isTrue);
+      expect(state.enemyHp, 0);
+      expect(state.phaseIndex, 2, reason: '不会再往上加形态');
+    });
+
+    test('形态越高，敌人出手越凶', () {
+      final first = phaseBattle().incomingDamage;
+      final second = phaseBattle()..phaseIndex = 2;
+      expect(
+        second.incomingDamage,
+        greaterThan(first),
+        reason: '每进入下一形态，攻击按 phaseAttackGrowth 提升',
+      );
+    });
+
+    test('新形态的狂暴要重新判定', () {
+      final state = phaseBattle();
+      state.enraged = true;
+      state.enemyHp = 10;
+      state.applyClear({GemType.red: 3}, combo: 1);
+      expect(state.enraged, isFalse, reason: '满血的下一管上"残血狂暴"不成立');
     });
   });
 }

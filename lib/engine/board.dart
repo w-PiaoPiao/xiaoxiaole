@@ -378,7 +378,11 @@ class BoardEngine {
 
   // ---------------------------------------------------------------- 交换
 
-  /// 判断两格能否交换：必须相邻，且交换后能形成消除（强化宝石例外，总能触发）。
+  /// 判断两格能否交换：必须相邻，且交换后能形成消除（强化宝石有两条例外）。
+  ///
+  /// 强化宝石不再"一换就炸"：和普通宝石一样，**换出一个消除才会生效**。
+  /// 只有两种情况与匹配无关——棱镜没有颜色、参与不了匹配，与任意相邻宝石
+  /// 交换都是它的用法（清除对方那一种颜色）；两颗强化宝石换到一起是组合技。
   ///
   /// 被机关附着的宝石不能交换——要先用相邻消除（或锤子）把机关破掉。
   bool canSwap(int a, int b) {
@@ -386,7 +390,12 @@ class BoardEngine {
     final ga = cells[a], gb = cells[b];
     if (ga == null || gb == null) return false;
     if (ga.locked || gb.locked) return false;
-    if (ga.isSpecial || gb.isSpecial) return true;
+    // 棱镜是唯一"总能换"的单颗强化宝石。
+    if (ga.special == SpecialKind.prism || gb.special == SpecialKind.prism) {
+      return true;
+    }
+    // 两颗强化宝石换到一起 = 组合技，不需要匹配。
+    if (ga.isSpecial && gb.isSpecial) return true;
     if (ga.type == gb.type) return false;
     return _swapCreatesMatch(a, b);
   }
@@ -528,8 +537,11 @@ class BoardEngine {
   }) {
     final steps = <CascadeStep>[];
 
-    // 强化宝石被直接交换时立即引爆。两颗强化宝石换到一起则触发**组合技**，
-    // 效果远大于各炸各的。
+    // 两颗强化宝石换到一起触发**组合技**，效果远大于各炸各的；棱镜与任意
+    // 宝石交换都会立即引爆（它没有颜色，匹配链遇不到它）。
+    //
+    // 其余的强化宝石不在这里处理：它们和普通宝石一样，必须先换出一个消除，
+    // 才会在下面的匹配链里被引爆（[_buildStep] 会引爆清除范围内的强化宝石）。
     final merged = _swapCombo(a, b, rules);
     final triggers = <SpecialActivation>[];
     final seed = <int>{};
@@ -539,11 +551,8 @@ class BoardEngine {
     } else {
       for (final i in [a, b]) {
         final gem = cells[i];
-        if (gem == null || !gem.isSpecial) continue;
+        if (gem == null || gem.special != SpecialKind.prism) continue;
         final partner = i == a ? b : a;
-        final prismType = gem.special == SpecialKind.prism
-            ? (cells[partner]?.type ?? gem.type)
-            : null;
         seed.add(i);
         triggers.add(
           SpecialActivation(
@@ -554,7 +563,7 @@ class BoardEngine {
               i,
               gem.special,
               gem.type,
-              prismType: prismType,
+              prismType: cells[partner]?.type ?? gem.type,
               rules: rules,
             ),
             bonus: _bonusFor(gem.special),

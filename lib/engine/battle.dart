@@ -61,6 +61,9 @@ enum CombatEventKind {
   /// 必杀技。
   ultimate,
 
+  /// 敌人打空一管血、进入下一形态（多管血 BOSS）。
+  phaseChange,
+
   /// 提示文本。
   info,
 }
@@ -96,6 +99,18 @@ class BattleState {
 
   int enemyHp;
   int enemyShield = 0;
+
+  /// 当前正在打第几管血（从 1 开始）。单管敌人恒为 1。
+  int phaseIndex = 1;
+
+  /// 这一场总共几管血。
+  int get phasesTotal => def.phases;
+
+  /// 还剩下几管（含正在打的那一管）。
+  int get phasesLeft => phasesTotal - phaseIndex + 1;
+
+  /// 打空这一管之后还有下一管。
+  bool get hasNextPhase => phaseIndex < phasesTotal;
 
   /// 敌人身上的易伤层数与剩余回合。
   int curseStacks = 0;
@@ -184,11 +199,18 @@ class BattleState {
   /// 承受的最大一击，不该被减伤绕过。
   int _predictAttackDamage(bool isHeavy) {
     var raw = def.attack * (isHeavy ? def.heavyMultiplier : 1.0);
+    // 形态递增：每打空一管血，敌人的下一次出手就更凶一档。预警算的是
+    // 「下一次」的伤害，所以这里的形态系数必须和 [_enemyAct] 用的是同一个。
+    if (phaseIndex > 1) {
+      raw *= 1 + def.phaseAttackGrowth * (phaseIndex - 1);
+    }
     if (enraged) raw *= 1.5;
     // 毒藤：缠在棋盘上的藤蔓每一株都在给敌人加码，清掉才停。
     if (vineCount > 0) raw *= 1 + vineCount * vineAttackBonus;
     if (profile.damageReduction > 0) raw *= 1 - profile.damageReduction;
-    final cap = (profile.maxHp * singleHitCapRatio).round();
+    // 「不屈」把单次受击的上限压得更低：这是"不被一刀秒"的直接解。
+    final capRatio = fx.hitCapRatio > 0 ? fx.hitCapRatio : singleHitCapRatio;
+    final cap = (profile.maxHp * capRatio).round();
     if (raw > cap) raw = cap.toDouble();
     return raw.round();
   }
@@ -395,10 +417,42 @@ class BattleState {
     _checkEnrage(events);
 
     if (enemyHp <= 0) {
-      enemyHp = 0;
-      phase = BattlePhase.won;
-      log.insert(0, '${def.name} 被击败了');
+      if (hasNextPhase) {
+        _advancePhase(events);
+      } else {
+        enemyHp = 0;
+        phase = BattlePhase.won;
+        log.insert(0, '${def.name} 被击败了');
+      }
     }
+  }
+
+  /// 打空一管血：敌人满血进入下一形态。
+  ///
+  /// 三条口径是刻意的：
+  ///   1. **溢出的伤害不带入下一管**——每一管都要实打实打空，否则一次
+  ///      攒好的爆发就能连穿两三管，多形态的节奏和压力全没了；
+  ///   2. **易伤与护盾清零**——打空一管是把优势清零重来，而不是把领先
+  ///      带过去；玩家得重新铺易伤，这就是多管血带来的深度；
+  ///   3. **出手倒计时重置**——换形态给一个完整的回合喘息，否则刚打空
+  ///      一管下一击就落下来，付出与回报完全脱节。
+  void _advancePhase(List<CombatEvent> events) {
+    phaseIndex++;
+    enemyHp = def.maxHp;
+    enemyShield = 0;
+    curseStacks = 0;
+    curseTurns = 0;
+    // 新形态的狂暴要重新判定：残血狂暴在满血的下一管上不成立。
+    enraged = false;
+    turnsToAttack = def.turnsPerAttack;
+    events.add(
+      CombatEvent(
+        CombatEventKind.phaseChange,
+        phaseIndex,
+        '第 $phaseIndex 形态',
+      ),
+    );
+    log.insert(0, '${def.name} 进入第 $phaseIndex 形态');
   }
 
   void _checkEnrage(List<CombatEvent> events) {

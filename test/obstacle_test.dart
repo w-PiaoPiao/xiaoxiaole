@@ -125,7 +125,13 @@ void main() {
     });
 
     test('强化宝石的爆炸波及也会破除机关', () {
-      final board = boardOf({ix(3, 3): 'Rb', ix(3, 4): 'Y.'});
+      // 把 (1,4) 也涂红：爆裂宝石换到 (3,4) 后与 (1,4)、(2,4) 凑成三连——
+      // 强化宝石现在也要换出消除才会引爆，直接换位不再炸。
+      final board = boardOf({
+        ix(3, 3): 'Rb',
+        ix(3, 4): 'Y.',
+        ix(1, 4): 'R.',
+      });
       lockAt(board, ix(4, 4), ObstacleKind.frost); // 在 3x3 波及范围内
       board.swapCells(ix(3, 3), ix(3, 4));
       final steps = board.resolveSwap(ix(3, 3), ix(3, 4));

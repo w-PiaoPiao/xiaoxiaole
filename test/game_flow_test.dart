@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gem_battle/engine/battle.dart';
 import 'package:gem_battle/ui/battle_view.dart';
 import 'package:gem_battle/ui/game_screen.dart';
+import 'package:gem_battle/ui/hud.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'support/widget.dart';
@@ -75,5 +76,64 @@ void main() {
     expect(battle.isOver, isFalse, reason: '重试后应该是一局全新的战斗');
     expect(battle.playerHp, greaterThan(0));
     expect(find.text('败北'), findsNothing);
+  });
+
+  testWidgets('震屏起落不重建战斗区子树（血条不重播填充动画）', (tester) async {
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      const MaterialApp(home: GameScreen(startLevel: 0)),
+    );
+    await advance(tester, 3.0); // 等开场卡自动关闭
+
+    final fx = tester.widget<BattleView>(find.byType(BattleView)).fx;
+    final barBefore = tester.element(find.byType(EnergyBar).first);
+
+    // 走一遍"消除 → 震屏 → 衰减归零"：这正是每次移动都会发生的路径。
+    // 曾经震屏是有无切换 widget 类型的（Transform ↔ 原始子树），归零那
+    // 一刻整棵子树被重建，血条的 TweenAnimationBuilder 从 0 重播一遍，
+    // 看起来就是每次移动 HUD 都在从左往右重刷。
+    fx.shakeBy(26);
+    await advance(tester, 0.6);
+
+    final barAfter = tester.element(find.byType(EnergyBar).first);
+    expect(
+      identical(barBefore, barAfter),
+      isTrue,
+      reason: '震屏起落不该重建战斗区：重建会让血条/回合点动画从头再播',
+    );
+  });
+
+  testWidgets('多管血 BOSS 的血条旁显示剩余管数', (tester) async {
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.reset);
+
+    // 第 5 关的深渊魔女是三管血。
+    await tester.pumpWidget(const MaterialApp(home: GameScreen(startLevel: 4)));
+    await advance(tester, 3.0);
+
+    expect(
+      find.text('×3'),
+      findsOneWidget,
+      reason: '血条后面要挂 ×N 徽标，N 是剩余管数',
+    );
+  });
+
+  testWidgets('单管敌人不显示 ×N 徽标', (tester) async {
+    tester.view.physicalSize = const Size(900, 1600);
+    tester.view.devicePixelRatio = 2.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(const MaterialApp(home: GameScreen(startLevel: 0)));
+    await advance(tester, 3.0);
+
+    expect(
+      find.textContaining('×'),
+      findsNothing,
+      reason: '普通敌人不该出现多管血标记',
+    );
   });
 }

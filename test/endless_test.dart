@@ -25,11 +25,12 @@ void main() {
       }
     });
 
-    test('波次越高越强：血量与攻击单调递增', () {
+    test('波次越高越强：总血量与攻击单调递增', () {
       for (var wave = 2; wave <= 30; wave++) {
         final prev = EndlessRoster.enemyFor(wave - 1);
         final cur = EndlessRoster.enemyFor(wave);
-        expect(cur.maxHp, greaterThan(prev.maxHp), reason: '第 $wave 波');
+        // 比的是总血量：第 9 / 16 波开始多一管，单看每管血量会在这些波次回落。
+        expect(cur.totalHp, greaterThan(prev.totalHp), reason: '第 $wave 波');
         expect(cur.attack, greaterThan(prev.attack), reason: '第 $wave 波');
       }
     });
@@ -100,9 +101,11 @@ void main() {
 
     test('强度最终会压过玩家，且肉鸽层让玩家走得更远', () {
       // 12 个种子的中位通过波数，按 tool/balance_report.dart 的 24 种子数据
-      // 校准（含机关口径：中位 20.5、p25 14、p75 39，观测范围 11~55）。
+      // 校准。含机关口径、多形态（第 9 波起 2 管、第 16 波起 3 管）与
+      // yellowRage=4 的稀有必杀：damage 流中位 13、survival 流中位 17，
+      // 观测范围 5~43（旧口径——必杀随便放的年代——中位是 20.5）。
       //
-      // 种子之间的方差很大，所以这里守的是**数量级失衡**：中位掉到 12 以下
+      // 种子之间的方差很大，所以这里守的是**数量级失衡**：中位掉到 10 以下
       // 说明肉鸽层在拖后腿，涨到 36 以上说明敌人成长压不住了。
       final fallen = [
         for (final seed in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
@@ -112,7 +115,7 @@ void main() {
         expect(
           wave,
           lessThanOrEqualTo(60),
-          reason: '有人打穿了 60 波，敌人成长太慢（当前观测上界约 55 波）',
+          reason: '有人打穿了 60 波，敌人成长太慢（当前观测上界约 43 波）',
         );
         expect(wave, greaterThan(3), reason: '但也不该死得太快');
       }
@@ -120,9 +123,9 @@ void main() {
       final median = (cleared[5] + cleared[6]) / 2;
       expect(
         median,
-        inInclusiveRange(12, 36),
+        inInclusiveRange(10, 36),
         reason:
-            '中位通过波数 $median 偏离校准窗口 [12, 36]，'
+            '中位通过波数 $median 偏离校准窗口 [10, 36]，'
             '肉鸽层的强度可能失衡',
       );
       expect(

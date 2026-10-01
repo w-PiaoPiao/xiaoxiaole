@@ -66,8 +66,9 @@ const damageIds = {
 /// 「保命优先」会主动吃下的强化。
 const survivalIds = {
   'guard', 'harden', 'heal', 'regen', 'vitality',
-  // 肉鸽层：把别的资源接进护盾的联动牌。
+  // 肉鸽层：把别的资源接进护盾的联动牌，以及专门垫身板的生存牌。
   'overcrit', 'overflowGuard', 'thornGuard',
+  'mountainHeart', 'aegisWall', 'unbroken',
 };
 
 const _balancedAdvisor = MoveAdvisor();

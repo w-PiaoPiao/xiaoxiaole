@@ -275,8 +275,30 @@ class FxController extends ChangeNotifier {
   /// 敌人受击后仰强度 0~1。
   double enemyRecoil = 0;
 
-  /// 屏幕震动强度（像素）。
+  /// 屏幕震动强度（像素）。触发点传入的强度只表达相对轻重，落到这里之前
+  /// 已经按 [_shakeScale] 收敛，且不会超过 [_shakeMax]。
   double shake = 0;
+
+  /// 震屏相位时钟（秒）。故意不复用 [time]：命中定格会把 [time] 的推进速度
+  /// 压到 1/10，共用的话抖动频率会从 ~13 Hz 掉到 1 Hz 出头，短促的"抖"
+  /// 变成缓慢的"晃"——那比震动本身更晕。
+  double _shakePhase = 0;
+
+  /// 震屏强度到像素位移的换算系数。
+  ///
+  /// 调用点传的是"相对轻重"（必杀 26、连击 7~26、每次消除的伤害 5~17），
+  /// 早期这张表被直接当像素用：连击时每一步都在刷新震动，棋盘一整局都在晃。
+  /// 收敛到 0.38 后，最重的必杀约 10 像素（约半个格子），打击感还在，
+  /// 又不会晃到看不清落点。
+  static const double _shakeScale = 0.38;
+
+  /// 震屏的像素上限。伤害类震动是 `3 + 伤害 × 0.03`，无尽模式后期伤害能到
+  /// 几百上千，不封顶的话后面每一刀都会把屏幕打成筛子。
+  static const double _shakeMax = 11;
+
+  /// 震屏衰减速率（像素/秒）。原来 26——26 像素的必杀要晃满一秒；现在 62，
+  /// 最重的一击约 0.16 秒收干净，是"顿一下"而不是"晃一阵"。
+  static const double _shakeDecay = 62;
 
   /// 全局时间，用于宝石旋转等周期性动画。
   double time = 0;
@@ -337,6 +359,10 @@ class FxController extends ChangeNotifier {
   void tick(double dt) {
     // 命中定格：命中瞬间把时间放慢到 1/10，形成"顿一下"的打击感。
     // 注意先用真实 dt 扣减，否则定格永远退不掉。
+    //
+    // 震屏的衰减与相位走 realDt：定格放慢的是画面动画，震屏跟着慢下来只会
+    // 把短促的抖动拖成缓慢的摇摆。
+    final realDt = dt;
     if (reducedMotion) {
       hitStop = 0;
     } else if (hitStop > 0) {
@@ -344,6 +370,7 @@ class FxController extends ChangeNotifier {
       dt *= 0.1;
     }
     time += dt;
+    _shakePhase += realDt;
     for (final gem in gems.values) {
       if (gem.t < 1) {
         gem.t = math.min(1, gem.t + dt / gem.duration);
@@ -410,7 +437,7 @@ class FxController extends ChangeNotifier {
     } else {
       dissolve = dissolveTarget;
     }
-    shake = math.max(0, shake - dt * 26);
+    shake = math.max(0, shake - realDt * _shakeDecay);
 
     if (_settle != null && _allSettled) {
       final completer = _settle;
@@ -470,10 +497,13 @@ class FxController extends ChangeNotifier {
 
   /// 震屏偏移（像素）。用两个不同频率的正弦合成，比纯随机更"有力"，
   /// 也不会因为随机抖动显得噪。
+  ///
+  /// 频率约 13 Hz / 18 Hz：原来 16 / 22 Hz 配大幅度时整个界面会糊成一片，
+  /// 降下来才看得清是"棋盘在顿"而不是"屏幕在嗡"。
   Offset get shakeOffset {
     if (shake <= 0.05) return Offset.zero;
-    final t = time * 60;
-    return Offset(math.sin(t * 1.7) * shake, math.cos(t * 2.3) * shake * 0.6);
+    final t = _shakePhase * 60;
+    return Offset(math.sin(t * 1.35) * shake, math.cos(t * 1.85) * shake * 0.6);
   }
 
   static double _easeOutCubic(double t) {
@@ -688,9 +718,11 @@ class FxController extends ChangeNotifier {
     labels.add(BoardLabel(text: text, x: gx, y: gy, color: color, size: size));
   }
 
+  /// 触发一次震屏。[amount] 是相对强度（必杀 26 最重、非法交换 5 最轻），
+  /// 实际位移按 [_shakeScale] 收敛并封顶在 [_shakeMax]。
   void shakeBy(double amount) {
     if (!allowShake) return;
-    shake = math.max(shake, amount);
+    shake = math.max(shake, math.min(amount * _shakeScale, _shakeMax));
   }
 
   void lunge() {
@@ -772,6 +804,7 @@ class FxController extends ChangeNotifier {
     hitStop = 0;
     enemyRecoil = 0;
     shake = 0;
+    _shakePhase = 0;
     enemyFlash = 0;
     enemyLunge = 0;
     playerFlash = 0;

@@ -227,4 +227,52 @@ void main() {
     expect(fx.shake, 0);
     expect(fx.shakeOffset, Offset.zero);
   });
+
+  test('震屏强度收敛且有上限，不再是"传多少晃多少"', () {
+    // 调用点传的是相对轻重（必杀 26、连击最高 26、伤害类 3 + 伤害 × 0.03）。
+    // 早期这些数值被直接当像素用，连击时每步都刷新，棋盘一整局都在晃。
+    final fx = FxController();
+
+    fx.shakeBy(26);
+    expect(fx.shake, lessThanOrEqualTo(11), reason: '最重的必杀也不该超过 11 像素');
+
+    fx.shake = 0;
+    fx.shakeBy(1000);
+    expect(fx.shake, 11, reason: '无尽后期伤害膨胀时震屏必须封顶');
+
+    fx.shake = 0;
+    fx.shakeBy(5);
+    expect(fx.shake, lessThan(3), reason: '最轻的一档（非法交换）要轻到不晃眼');
+  });
+
+  test('震屏短促：最重的一击 0.3 秒内收干净', () {
+    final fx = FxController();
+    fx.shakeBy(26);
+    for (var i = 0; i < 18; i++) {
+      fx.tick(1 / 60); // 0.3 秒
+    }
+    expect(fx.shake, 0, reason: '震屏要"顿一下"就停，拖久了会晃得看不清棋盘');
+  });
+
+  test('命中定格不拖慢震屏的衰减与相位', () {
+    // 定格会把画面时间压到 1/10。震屏若跟着慢下来，短促的抖会变成 1 Hz
+    // 出头的缓慢摇摆——那比震动本身更晕。这里在定格尚未结束时取样。
+    final fx = FxController();
+    fx.hitImpact(damage: 200, crit: true);
+    expect(fx.hitStop, greaterThan(0.1), reason: '先构造一个还在进行中的定格');
+    fx.shakeBy(26);
+    final before = fx.shake;
+    final firstOffset = fx.shakeOffset;
+
+    for (var i = 0; i < 6; i++) {
+      fx.tick(1 / 60); // 0.1 秒，仍在定格内
+    }
+    expect(fx.hitStop, greaterThan(0), reason: '取样点必须落在定格期间');
+    expect(
+      fx.shake,
+      lessThan(before * 0.5),
+      reason: '定格期间震屏也必须按真实时间衰减',
+    );
+    expect(fx.shakeOffset, isNot(firstOffset), reason: '相位同样不该被定格冻住');
+  });
 }

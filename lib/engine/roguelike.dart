@@ -120,6 +120,11 @@ class RoguelikeEffects {
   /// 必杀消耗的倍率（0.6 = 少花 40% 怒气，「月华」）。
   final double ultimateCostMul;
 
+  /// 单次受击的伤害上限（相对最大生命）。0 = 用默认的
+  /// [BattleState.singleHitCapRatio]（0.65）；「不屈」把它压到 0.4——
+  /// 这是"不被一刀秒"的直接解，也是多管血 BOSS 逐击变凶之后的保命底牌。
+  final double hitCapRatio;
+
   /// 棋盘层规则（棱镜多清一色、5x5 爆裂、破空成十字）。
   final BoardRules boardRules;
 
@@ -138,6 +143,7 @@ class RoguelikeEffects {
     this.shieldGainMul = 1,
     this.ragePerTurn = 0,
     this.ultimateCostMul = 1,
+    this.hitCapRatio = 0,
     this.boardRules = BoardRules.none,
   });
 
@@ -160,6 +166,7 @@ class RoguelikeEffects {
     double? shieldGainMul,
     int? ragePerTurn,
     double? ultimateCostMul,
+    double? hitCapRatio,
     BoardRules? boardRules,
   }) {
     return RoguelikeEffects(
@@ -177,6 +184,7 @@ class RoguelikeEffects {
       shieldGainMul: shieldGainMul ?? this.shieldGainMul,
       ragePerTurn: ragePerTurn ?? this.ragePerTurn,
       ultimateCostMul: ultimateCostMul ?? this.ultimateCostMul,
+      hitCapRatio: hitCapRatio ?? this.hitCapRatio,
       boardRules: boardRules ?? this.boardRules,
     );
   }
@@ -198,6 +206,7 @@ class RoguelikeEffects {
       other.shieldGainMul == shieldGainMul &&
       other.ragePerTurn == ragePerTurn &&
       other.ultimateCostMul == ultimateCostMul &&
+      other.hitCapRatio == hitCapRatio &&
       other.boardRules == boardRules;
 
   @override
@@ -216,6 +225,7 @@ class RoguelikeEffects {
     shieldGainMul,
     ragePerTurn,
     ultimateCostMul,
+    hitCapRatio,
     boardRules,
   );
 }

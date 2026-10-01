@@ -196,15 +196,19 @@ void main() {
   });
 
   group('强化宝石', () {
-    test('交换横线宝石会引爆整行', () {
-      final board = BoardEngine.fromLayout(blankLayout());
+    test('横线宝石换出消除才引爆，清除整行', () {
+      // (4,3) 在底棋盘上本来是红——先涂成蓝，保证交换前不会先凑出三连；
+      // (5,3)、(6,3) 涂红，交换后横线宝石落到 (4,3) 正好凑成三连。
+      final board = BoardEngine.fromLayout(
+        layoutWith({ix(4, 3): 'B', ix(5, 3): 'R', ix(6, 3): 'R'}),
+      );
       board.cells[ix(3, 3)] = Gem(
         id: 9001,
         type: GemType.red,
         special: SpecialKind.lineH,
       );
       final a = ix(3, 3), b = ix(4, 3);
-      expect(board.canSwap(a, b), isTrue);
+      expect(board.canSwap(a, b), isTrue, reason: '换到 (4,3) 后能形成三连');
 
       board.swapCells(a, b);
       final steps = board.resolveSwap(a, b);
@@ -215,23 +219,69 @@ void main() {
         BoardEngine.cols,
         reason: '整行 8 格全部清除',
       );
-      expect(steps.first.counts[GemType.red], 2, reason: '该行只有 2 颗是红色');
+      expect(steps.first.counts[GemType.red], 3, reason: '该行只有 3 颗是红色');
     });
 
-    test('交换爆裂宝石会清除 3x3', () {
-      final board = BoardEngine.fromLayout(blankLayout());
+    test('爆裂宝石换出消除才引爆，清除 3x3', () {
+      // (6,3) 涂蓝：蓝爆裂换到 (4,3) 后与 (5,3)、(6,3) 形成三连。
+      final board = BoardEngine.fromLayout(layoutWith({ix(6, 3): 'B'}));
       board.cells[ix(3, 3)] = Gem(
         id: 9002,
         type: GemType.blue,
         special: SpecialKind.burst,
       );
       final a = ix(3, 3), b = ix(4, 3);
+      expect(board.canSwap(a, b), isTrue);
 
       board.swapCells(a, b);
       final steps = board.resolveSwap(a, b);
 
       expect(steps.first.activations.single.kind, SpecialKind.burst);
-      expect(steps.first.cleared.length, 9, reason: '3x3 共 9 格');
+      expect(
+        steps.first.cleared.length,
+        10,
+        reason: '匹配的三格 + 爆裂 3x3（重叠两格），比纯 3x3 多出 (6,3)',
+      );
+    });
+
+    test('换不出消除的强化宝石不能交换', () {
+      final board = BoardEngine.fromLayout(blankLayout());
+      board.cells[ix(3, 3)] = Gem(
+        id: 9004,
+        type: GemType.red,
+        special: SpecialKind.lineH,
+      );
+      // (4,3) 与它同色：交换不改变颜色分布，不会产生新匹配。
+      expect(board.canSwap(ix(3, 3), ix(4, 3)), isFalse, reason: '同色交换无意义');
+      // 异色但换不出三连，同样不允许——强化宝石不该"一点就炸"。
+      expect(board.canSwap(ix(3, 3), ix(3, 4)), isFalse, reason: '换不出消除');
+    });
+
+    test('棱镜随时可换，两颗强化宝石的组合技不需要匹配', () {
+      final prismBoard = BoardEngine.fromLayout(blankLayout());
+      prismBoard.cells[ix(3, 3)] = Gem(
+        id: 9005,
+        type: GemType.red,
+        special: SpecialKind.prism,
+      );
+      expect(
+        prismBoard.canSwap(ix(3, 3), ix(4, 3)),
+        isTrue,
+        reason: '棱镜没有颜色、参与不了匹配，与任意宝石交换都是它的用法',
+      );
+
+      final combo = BoardEngine.fromLayout(blankLayout());
+      combo.cells[ix(3, 3)] = Gem(
+        id: 9006,
+        type: GemType.red,
+        special: SpecialKind.lineH,
+      );
+      combo.cells[ix(4, 3)] = Gem(
+        id: 9007,
+        type: GemType.blue,
+        special: SpecialKind.burst,
+      );
+      expect(combo.canSwap(ix(3, 3), ix(4, 3)), isTrue, reason: '组合技不需要匹配');
     });
 
     test('棱镜与普通宝石交换会清除全场同色', () {
