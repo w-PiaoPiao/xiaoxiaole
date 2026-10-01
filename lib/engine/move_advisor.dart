@@ -44,7 +44,9 @@ class MoveAdvisor {
 
         final probe = board.clone();
         probe.swapCells(i, j);
-        final steps = probe.resolveSwap(i, j);
+        // 推演必须带上玩家的棋盘规则（棱镜多清一色、破空成十字……），
+        // 否则提示的价值会被低估，顾问会漏掉真正的妙手。
+        final steps = probe.resolveSwap(i, j, rules: battle.profile.boardRules);
         if (steps.isEmpty) continue;
 
         final counts = <GemType, int>{};

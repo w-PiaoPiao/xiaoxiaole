@@ -1,4 +1,5 @@
 import 'gem.dart';
+import 'roguelike.dart';
 
 /// 敌人的行为原型，决定它的攻击节奏与额外机制。
 enum EnemyArchetype {
@@ -143,6 +144,13 @@ class PlayerProfile {
   /// 生命低于 [desperateThreshold] 时的伤害加成。
   final double desperateBonus;
 
+  /// 无尽模式的肉鸽质变与代价。
+  ///
+  /// 与上面那些"数字更大"的成长字段分开存放：这里装的是**规则改变**
+  /// （暴击顺带产盾、易伤不再清零）与**新增的负面机制**（每回合自损）。
+  /// 出厂档案的 [RoguelikeEffects.none] 与没有强化时完全等价。
+  final RoguelikeEffects effects;
+
   const PlayerProfile({
     this.maxHp = 300,
     this.redDamage = 26,
@@ -164,7 +172,12 @@ class PlayerProfile {
     this.regenPerTurn = 0,
     this.damageReduction = 0,
     this.desperateBonus = 0,
+    this.effects = RoguelikeEffects.none,
   });
+
+  /// 棋盘层规则（棱镜多清一色、5x5 爆裂、破空成十字）。棋盘引擎不认识档案，
+  /// 由调用方把它显式传进 `resolveSwap` / `resolveUltimate`。
+  BoardRules get boardRules => effects.boardRules;
 
   /// 生命低于这个比例时进入「逆境」，触发 [desperateBonus]。
   static const double desperateThreshold = 0.4;
@@ -193,6 +206,7 @@ class PlayerProfile {
     int? regenPerTurn,
     double? damageReduction,
     double? desperateBonus,
+    RoguelikeEffects? effects,
   }) {
     return PlayerProfile(
       maxHp: maxHp ?? this.maxHp,
@@ -215,6 +229,7 @@ class PlayerProfile {
       regenPerTurn: regenPerTurn ?? this.regenPerTurn,
       damageReduction: damageReduction ?? this.damageReduction,
       desperateBonus: desperateBonus ?? this.desperateBonus,
+      effects: effects ?? this.effects,
     );
   }
 }

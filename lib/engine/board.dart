@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'gem.dart';
+import 'roguelike.dart';
 
 /// 一次匹配形成的组合（可能由多条横/竖连线在拐角处合并而成）。
 class MatchGroup {
@@ -433,12 +434,14 @@ class BoardEngine {
   /// 交换后结算整个连锁。调用前需要先执行 [swapCells]。
   ///
   /// [a]、[b] 是本次交换的两格，用于决定强化宝石的生成位置。
-  List<CascadeStep> resolveSwap(int a, int b) {
+  /// [rules] 是玩家 build 对棋盘规则的改写（「棱镜宗师」「爆破工程」
+  /// 「十字破空」）。默认值等于现行规则，因此不传的地方行为完全不变。
+  List<CascadeStep> resolveSwap(int a, int b, {BoardRules rules = BoardRules.none}) {
     final steps = <CascadeStep>[];
 
     // 强化宝石被直接交换时立即引爆。两颗强化宝石换到一起则触发**组合技**，
     // 效果远大于各炸各的。
-    final merged = _swapCombo(a, b);
+    final merged = _swapCombo(a, b, rules);
     final triggers = <SpecialActivation>[];
     final seed = <int>{};
     if (merged != null) {
@@ -457,7 +460,8 @@ class BoardEngine {
           index: i,
           kind: gem.special,
           type: gem.type,
-          area: _activationArea(i, gem.special, gem.type, prismType: prismType),
+          area: _activationArea(i, gem.special, gem.type,
+              prismType: prismType, rules: rules),
           bonus: _bonusFor(gem.special),
         ));
       }
@@ -474,6 +478,7 @@ class BoardEngine {
         // 它们都已经"用掉"了，谁也不能再按单颗效果炸一遍，否则就又变回
         // "各炸各的"。（只抑制其中一颗时，另一颗会额外炸出自己的范围。）
         suppress: merged != null ? {a, b} : const {},
+        rules: rules,
       ));
       combo++;
     }
@@ -498,6 +503,7 @@ class BoardEngine {
         seedActivations: const [],
         spawns: spawns,
         preferredAnchors: anchors,
+        rules: rules,
       ));
       combo++;
       preferred = const {};
@@ -520,7 +526,7 @@ class BoardEngine {
   /// | 棱镜 + 破空 | 全场同色，并清掉它们所在的每一行与每一列 |
   /// | 棱镜 + 爆裂 | 全场同色 + 5x5 |
   /// | 棱镜 + 棱镜 | 清空整个棋盘 |
-  SpecialActivation? _swapCombo(int a, int b) {
+  SpecialActivation? _swapCombo(int a, int b, BoardRules rules) {
     final ga = cells[a], gb = cells[b];
     if (ga == null || gb == null) return null;
     if (!ga.isSpecial || !gb.isSpecial) return null;
@@ -553,7 +559,9 @@ class BoardEngine {
         name = '同色风暴';
         bonus = 400;
       } else {
-        extra = _boxArea(prismIndex, 2);
+        // 含爆裂的组合技跟着「爆破工程」一起放大：半径 1+rules.burstRadius，
+        // 默认（rules 为空）就是原来的 5x5。
+        extra = _boxArea(prismIndex, 1 + rules.burstRadius);
         name = '棱镜爆裂';
         bonus = 320;
       }
@@ -593,7 +601,7 @@ class BoardEngine {
       index: a,
       kind: SpecialKind.burst,
       type: ga.type,
-      area: _boxArea(a, 2),
+      area: _boxArea(a, 1 + rules.burstRadius),
       bonus: 240,
       comboName: '连环爆裂',
     );
@@ -659,7 +667,13 @@ class BoardEngine {
   }
 
   /// 必杀技：以 [centerIndex] 为中心清除整行与整列，随后照常结算连锁。
-  List<CascadeStep> resolveUltimate(int centerIndex) {
+  ///
+  /// [rules] 与 [resolveSwap] 的同名参数一致：连锁里被波及的强化宝石按
+  /// 玩家的棋盘规则引爆（「爆破工程」的必杀同样是 5x5）。
+  List<CascadeStep> resolveUltimate(
+    int centerIndex, {
+    BoardRules rules = BoardRules.none,
+  }) {
     final steps = <CascadeStep>[];
     final cx = xOf(centerIndex), cy = yOf(centerIndex);
     final seed = <int>{
@@ -671,6 +685,7 @@ class BoardEngine {
       seedClear: seed,
       seedActivations: const [],
       spawns: const [],
+      rules: rules,
     ));
 
     var combo = 2;
@@ -690,6 +705,7 @@ class BoardEngine {
         seedClear: seedClear,
         seedActivations: const [],
         spawns: spawns,
+        rules: rules,
       ));
       combo++;
     }
@@ -703,6 +719,7 @@ class BoardEngine {
     required List<SpecialSpawn> spawns,
     Map<int, int> preferredAnchors = const {},
     Set<int> suppress = const {},
+    BoardRules rules = BoardRules.none,
   }) {
     final toClear = <int>{...seedClear};
     // 交换直接触发的强化宝石：其影响范围要一并纳入清除。
@@ -728,7 +745,7 @@ class BoardEngine {
       if (!activated.add(i)) continue;
       final gem = cells[i];
       if (gem == null) continue;
-      final area = _activationArea(i, gem.special, gem.type);
+      final area = _activationArea(i, gem.special, gem.type, rules: rules);
       activations.add(SpecialActivation(
         index: i,
         kind: gem.special,
@@ -808,28 +825,69 @@ class BoardEngine {
     }
   }
 
-  List<int> _activationArea(int index, SpecialKind kind, GemType type, {GemType? prismType}) {
+  List<int> _activationArea(
+    int index,
+    SpecialKind kind,
+    GemType type, {
+    GemType? prismType,
+    BoardRules rules = BoardRules.none,
+  }) {
     final x = xOf(index), y = yOf(index);
     switch (kind) {
       case SpecialKind.lineH:
-        return [for (var xx = 0; xx < cols; xx++) this.index(xx, y)];
       case SpecialKind.lineV:
-        return [for (var yy = 0; yy < rows; yy++) this.index(x, yy)];
+        final row = [for (var xx = 0; xx < cols; xx++) this.index(xx, y)];
+        final column = [for (var yy = 0; yy < rows; yy++) this.index(x, yy)];
+        // 默认路径与改造前逐字等价；只有拿到「十字破空」时才合并行列。
+        if (!rules.lineBecomesCross) {
+          return kind == SpecialKind.lineH ? row : column;
+        }
+        return {...row, ...column}.toList();
       case SpecialKind.burst:
+        // 半径 1 就是 3x3；「爆破工程」把它抬到 2（5x5）。
+        final r = rules.burstRadius;
         return [
-          for (var dy = -1; dy <= 1; dy++)
-            for (var dx = -1; dx <= 1; dx++)
+          for (var dy = -r; dy <= r; dy++)
+            for (var dx = -r; dx <= r; dx++)
               if (inBounds(x + dx, y + dy)) this.index(x + dx, y + dy),
         ];
       case SpecialKind.prism:
-        final target = prismType ?? type;
+        final targets = <GemType>{prismType ?? type};
+        // 「棱镜宗师」：再拖上棋盘上堆得最多的那几种颜色。
+        for (var i = 0; i < rules.prismExtraColors; i++) {
+          final extra = _mostCommonTypeExcluding(targets);
+          if (extra == null) break;
+          targets.add(extra);
+        }
         return [
           for (var i = 0; i < cells.length; i++)
-            if (cells[i]?.type == target) i,
+            if (targets.contains(cells[i]?.type)) i,
         ];
       case SpecialKind.none:
         return const [];
     }
+  }
+
+  /// 棋盘上数量最多、且不在 [excluded] 里的颜色；没有可选的就返回 null。
+  ///
+  /// 「棱镜宗师」用它挑要额外清除的颜色——总是清当前堆得最多的那种，
+  /// 收益直观、可预期，不会让玩家觉得"这一下清得莫名其妙"。
+  GemType? _mostCommonTypeExcluding(Set<GemType> excluded) {
+    final counts = <GemType, int>{};
+    for (final gem in cells) {
+      final type = gem?.type;
+      if (type == null || excluded.contains(type)) continue;
+      counts[type] = (counts[type] ?? 0) + 1;
+    }
+    GemType? best;
+    var bestCount = 0;
+    for (final entry in counts.entries) {
+      if (entry.value > bestCount) {
+        best = entry.key;
+        bestCount = entry.value;
+      }
+    }
+    return best;
   }
 
   /// 消除后让上方宝石落下，并从顶部补足新宝石。

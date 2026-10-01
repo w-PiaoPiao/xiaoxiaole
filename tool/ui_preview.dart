@@ -558,6 +558,47 @@ void main() {
     await _advance(tester, 1.0);
   });
 
+  testWidgets('无尽模式 · 肉鸽三选一（稀有度视觉）', (tester) async {
+    _screen(tester, pixel, topInset: 47);
+    final shot = _Shot(
+      MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.dark,
+          fontFamily: 'CJK',
+          scaffoldBackgroundColor: Palette.bgDeep,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Palette.gold,
+            brightness: Brightness.dark,
+          ),
+        ),
+        builder: (context, child) => MediaQuery.withClampedTextScaling(
+          maxScaleFactor: 1.3,
+          child: child!,
+        ),
+        home: GameScreen(
+          settings: AppSettings(),
+          sfx: SfxController(),
+          mode: GameMode.endless,
+          // 第 3 波：打完这一波发牌时 depth=2，正是"每 3 波保底稀有"的
+          // 保底波——三选一里必然出现稀有牌，角标视觉因此可以被稳定截到。
+          startLevel: 2,
+        ),
+      ),
+    );
+    await tester.pumpWidget(RepaintBoundary(key: shot.key, child: shot.child));
+    await _advance(tester, 3.0);
+
+    _liveBattle(tester).enemyHp = 300;
+    final won = await _playToWin(tester, maxMoves: 30);
+    expect(won, isTrue, reason: '收不掉残血的第三波 BOSS，就截不到肉鸽三选一');
+    expect(find.text('稀有'), findsWidgets,
+        reason: '保底波的三选一必须含稀有牌，否则这张预览没有覆盖到角标视觉');
+    await shot.capture(tester, '26_endless_upgrade');
+    await _quiet(tester);
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
   testWidgets('小屏主菜单（320 宽 + 大字体）', (tester) async {
     _screen(tester, const Size(320, 568), topInset: 20);
     final shot = _Shot(_menuApp(textScale: 1.5));

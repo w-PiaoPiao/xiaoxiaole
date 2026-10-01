@@ -8,6 +8,14 @@ import 'package:gem_battle/engine/levels.dart';
 import 'package:gem_battle/engine/move_advisor.dart';
 import 'package:gem_battle/engine/upgrades.dart';
 
+/// 「输出优先」的选牌集合（与 tool/balance_report.dart 的 damage 策略一致）。
+const _endlessDamageIds = {
+  'blade', 'crit', 'critDamage', 'special', 'combo', 'curse', 'desperate', 'ultimate',
+  'bloodPact', 'ascetic', 'rageEngine',
+  'crossStrike', 'demolition', 'prismMaster',
+  'plague', 'eternalCombo', 'moonBlessing',
+};
+
 void main() {
   group('无尽模式 · BOSS 生成', () {
     test('同一波次永远生成同一个 BOSS（确定性）', () {
@@ -80,7 +88,11 @@ void main() {
 
   group('无尽模式 · 推演', () {
     /// 用落子顾问打无尽模式，返回倒下的波次（一直活着就返回 null）。
-    int? simulateEndless({required int seed, int maxWave = 40}) {
+    ///
+    /// 无尽模式启用肉鸽层：三选一按「输出优先」吃一条，跳过「苦修」这种
+    /// 把护盾资源清零的陷阱牌——与 tool/balance_report.dart 的 damage 策略
+    /// 同口径，波次窗口的校准数据也来自那份报告。
+    int? simulateEndless({required int seed, int maxWave = 60}) {
       var profile = Campaign.player;
       var carryHp = profile.maxHp;
       final taken = <String, int>{};
@@ -104,13 +116,15 @@ void main() {
             continue;
           }
           board.swapCells(move.a, move.b);
-          for (final step in board.resolveSwap(move.a, move.b)) {
+          for (final step
+              in board.resolveSwap(move.a, move.b, rules: profile.boardRules)) {
             battle.applyClear(step.counts, combo: step.combo, specialBonus: step.specialBonus);
           }
           if (battle.canCastUltimate) {
             battle.castUltimate();
             for (final step in board.resolveUltimate(
               board.index(BoardEngine.cols ~/ 2, BoardEngine.rows ~/ 2),
+              rules: profile.boardRules,
             )) {
               battle.applyClear(
                 step.counts,
@@ -127,9 +141,18 @@ void main() {
         expect(turns, lessThan(400), reason: '第 $wave 波超时未分出胜负');
 
         // 每过一波发三选一，按「输出优先」吃一条——这是无尽模式的真实玩法。
-        final offer = UpgradePool.roll(profile: profile, taken: taken, rng: rng);
+        final offer = UpgradePool.roll(
+          profile: profile,
+          taken: taken,
+          rng: rng,
+          depth: wave - 1,
+          roguelike: true,
+        );
         if (offer.isNotEmpty) {
-          final choice = offer.first;
+          final i = offer.indexWhere(
+            (u) => _endlessDamageIds.contains(u.id) && u.id != 'ascetic',
+          );
+          final choice = offer[i >= 0 ? i : 0];
           profile = choice.apply(profile);
           taken[choice.id] = (taken[choice.id] ?? 0) + 1;
         }
@@ -147,19 +170,31 @@ void main() {
     test('前几波对新手足够友好', () {
       // 无尽模式没有强化铺垫，第一波必须稳赢。
       for (var seed = 1; seed <= 8; seed++) {
-        final fallen = simulateEndless(seed: seed);
+        final fallen = simulateEndless(seed: seed, maxWave: 40);
         expect(fallen, isNot(1), reason: '第 1 波不该倒下（seed=$seed）');
         expect(fallen, isNot(2), reason: '第 2 波不该倒下（seed=$seed）');
       }
     });
 
-    test('强度最终会压过玩家（跑不死的不叫无尽模式）', () {
-      // 三个种子都不该撑过 40 波：指数成长的敌人必须追上线性成长的玩家。
-      for (final seed in [1, 2, 3]) {
-        final fallen = simulateEndless(seed: seed);
-        expect(fallen, isNotNull, reason: 'seed=$seed 打穿了 40 波，敌人成长太慢');
-        expect(fallen, greaterThan(3), reason: '但也不该死得太快');
+    test('强度最终会压过玩家，且肉鸽层让玩家走得更远', () {
+      // 三个种子都该在 60 波内倒下：指数成长的敌人必须追上线性+质变的玩家。
+      // 窗口按 balance_report 的 24 种子数据校准（damage 策略中位 17、
+      // 基线 16）：中位明显低于 14 说明肉鸽层在拖后腿，超过 28 则说明
+      // 敌人成长压不住了。
+      final fallen = <int?>[
+        for (final seed in [1, 2, 3]) simulateEndless(seed: seed),
+      ];
+      for (final wave in fallen) {
+        expect(wave, isNotNull, reason: '有人打穿了 60 波，敌人成长太慢');
+        expect(wave, greaterThan(3), reason: '但也不该死得太快');
       }
+      final settled = fallen.whereType<int>().toList()..sort();
+      final median = settled[1];
+      expect(median, inExclusiveRange(13, 29),
+          reason: '中位倒下波次 $median 偏离校准窗口 [14, 28]，'
+              '肉鸽层的强度可能失衡');
+      expect(settled.last, greaterThan(30),
+          reason: '至少一个 build 应能走得很深——质变牌要把上限拉开');
     });
   });
 }

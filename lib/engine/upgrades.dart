@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'levels.dart';
+import 'roguelike.dart';
 
 /// 强化卡片的图标。
 ///
@@ -34,6 +35,24 @@ enum UpgradeIcon {
 
   /// 月牙 · 必杀「斩月」。
   moon,
+
+  /// 水滴 · 溢流护盾：把溢出来的治疗结成护盾。
+  droplet,
+
+  /// 荆棘 · 荆棘壁垒：被护盾扛下的伤害扎回去。
+  thorn,
+
+  /// 齿轮 · 过载引擎：把溢出的怒气烧成伤害。
+  gear,
+
+  /// 三叉 · 棱镜宗师：一次清掉更多颜色。
+  trident,
+
+  /// 十字准星 · 十字破空：整行与整列一起清。
+  crosshair,
+
+  /// 血滴 · 血契：以血换力。
+  blood,
 }
 
 /// 一条可选的强化。
@@ -59,6 +78,13 @@ class Upgrade {
   /// 抽取权重，越大越常出现。
   final int weight;
 
+  /// 稀有度。只影响抽取概率与卡片外观——效果强弱由条目自己的数值决定。
+  /// 战役模式不启用分层（见 [UpgradePool.roll]）。
+  final UpgradeRarity rarity;
+
+  /// 是否"有代价"：卡片会额外标一行提醒玩家这条牌不是白拿的。
+  final bool isCostly;
+
   final PlayerProfile Function(PlayerProfile profile) apply;
 
   /// 出现的前置条件（例如「暴击倍率」要先有暴击率才有意义）。
@@ -73,6 +99,8 @@ class Upgrade {
     required this.apply,
     this.maxStacks = 5,
     this.weight = 8,
+    this.rarity = UpgradeRarity.common,
+    this.isCostly = false,
     this.available,
   });
 }
@@ -234,6 +262,220 @@ class UpgradePool {
       weight: 5,
       apply: (p) => p.copyWith(desperateBonus: p.desperateBonus + 0.30),
     ),
+
+    // ================================================== 肉鸽层（无尽模式）
+    //
+    // 下面这一批不再堆数字，而是**改规则**：把两种宝石接起来、让棋盘行为
+    // 变形、或者用明确的代价换一份夸张的收益。它们只在无尽模式出现
+    // （见 [UpgradePool.roll] 的 roguelike 开关），并且大多需要先有对应的
+    // build 铺垫才有资格被抽到——这让每一局的成长方向在中期就分岔了。
+
+    // ------------------------------------------------------ 稀有 · 联动型
+    Upgrade(
+      id: 'overcrit',
+      name: '过量暴击',
+      desc: '暴击伤害的 50% 一并结成护盾',
+      icon: UpgradeIcon.burst,
+      themeColor: 0xFFFF8A5C,
+      rarity: UpgradeRarity.rare,
+      maxStacks: 2,
+      weight: 7,
+      // 没有暴击率的时候这张牌等于空过。
+      available: (p) => p.critChance >= 0.16,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          critToShield: (p.effects.critToShield + 0.5).clamp(0.0, 1.0),
+        ),
+      ),
+    ),
+    Upgrade(
+      id: 'overflowGuard',
+      name: '溢流护盾',
+      desc: '治疗溢出上限的部分转为护盾',
+      icon: UpgradeIcon.droplet,
+      themeColor: 0xFF7CE0B0,
+      rarity: UpgradeRarity.rare,
+      maxStacks: 2,
+      weight: 7,
+      available: (p) => p.greenHeal >= 30,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          healOverflowToShield: (p.effects.healOverflowToShield + 0.5).clamp(0.0, 1.0),
+        ),
+      ),
+    ),
+    Upgrade(
+      id: 'thornGuard',
+      name: '荆棘壁垒',
+      desc: '护盾扛下的伤害 30% 反弹给敌人',
+      icon: UpgradeIcon.thorn,
+      themeColor: 0xFF5FC8FF,
+      rarity: UpgradeRarity.rare,
+      // 两层封顶：反弹到 90% 就成了"挨打即反击"的永动机，生存流会无脑躺赢。
+      maxStacks: 2,
+      weight: 7,
+      available: (p) => p.maxShield >= 300,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          shieldReflect: (p.effects.shieldReflect + 0.30).clamp(0.0, 1.2),
+        ),
+      ),
+    ),
+    Upgrade(
+      id: 'rageEngine',
+      name: '过载引擎',
+      desc: '溢出的怒气转为伤害（每点 +3）',
+      icon: UpgradeIcon.gear,
+      themeColor: 0xFFF0B01F,
+      rarity: UpgradeRarity.rare,
+      maxStacks: 2,
+      weight: 7,
+      available: (p) => p.yellowRage >= 17,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          rageOverflowDamage: (p.effects.rageOverflowDamage + 3).clamp(0.0, 9),
+        ),
+      ),
+    ),
+
+    // -------------------------------------------------- 稀有 · 棋盘质变
+    Upgrade(
+      id: 'prismMaster',
+      name: '棱镜宗师',
+      desc: '棱镜额外清除一种颜色',
+      icon: UpgradeIcon.trident,
+      themeColor: 0xFFC08CFF,
+      rarity: UpgradeRarity.rare,
+      maxStacks: 1,
+      weight: 6,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          boardRules: p.effects.boardRules.copyWith(
+            prismExtraColors: p.effects.boardRules.prismExtraColors + 1,
+          ),
+        ),
+      ),
+    ),
+    Upgrade(
+      id: 'demolition',
+      name: '爆破工程',
+      desc: '爆裂宝石范围扩大到 5x5',
+      icon: UpgradeIcon.burst,
+      themeColor: 0xFFFF9A4D,
+      rarity: UpgradeRarity.rare,
+      maxStacks: 1,
+      weight: 6,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          boardRules: p.effects.boardRules.copyWith(
+            burstRadius: p.effects.boardRules.burstRadius + 1,
+          ),
+        ),
+      ),
+    ),
+    Upgrade(
+      id: 'crossStrike',
+      name: '十字破空',
+      desc: '破空宝石同时清除整行与整列',
+      icon: UpgradeIcon.crosshair,
+      themeColor: 0xFFFFD34D,
+      rarity: UpgradeRarity.rare,
+      maxStacks: 1,
+      weight: 6,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          boardRules: p.effects.boardRules.copyWith(lineBecomesCross: true),
+        ),
+      ),
+    ),
+
+    // -------------------------------------------------- 稀有 · 代价型
+    Upgrade(
+      id: 'bloodPact',
+      name: '血契',
+      desc: '全部伤害 +50% · 每回合自损 5 点生命',
+      icon: UpgradeIcon.blood,
+      themeColor: 0xFFFF3B5C,
+      rarity: UpgradeRarity.rare,
+      // 不给叠层：+100% 伤害配 -10 血/回合会把"高张力"变成纯粹的死亡倒计时。
+      maxStacks: 1,
+      weight: 8,
+      isCostly: true,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          damageMul: p.effects.damageMul + 0.5,
+          selfDamagePerTurn: p.effects.selfDamagePerTurn + 5,
+        ),
+      ),
+    ),
+    Upgrade(
+      id: 'ascetic',
+      name: '苦修',
+      desc: '红宝石伤害 +90%、暴击率 +10% · 无法获得护盾',
+      icon: UpgradeIcon.skull,
+      themeColor: 0xFF9C8FC4,
+      rarity: UpgradeRarity.rare,
+      maxStacks: 1,
+      weight: 7,
+      isCostly: true,
+      available: (p) => p.blueShield > 0,
+      apply: (p) => p.copyWith(
+        redDamage: (p.redDamage * 1.9).round(),
+        critChance: (p.critChance + 0.10).clamp(0.0, 0.8),
+        effects: p.effects.copyWith(shieldGainMul: 0),
+      ),
+    ),
+
+    // ------------------------------------------------------------ 传说
+    Upgrade(
+      id: 'plague',
+      name: '瘟疫',
+      desc: '易伤每回合只掉一层 · 每层使强化宝石伤害 +18%',
+      icon: UpgradeIcon.skull,
+      themeColor: 0xFF9E5CE8,
+      rarity: UpgradeRarity.legendary,
+      maxStacks: 1,
+      weight: 6,
+      available: (p) => p.curseBonus >= 0.20,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          cursePersists: true,
+          curseToSpecialPower: p.effects.curseToSpecialPower + 0.18,
+        ),
+      ),
+    ),
+    Upgrade(
+      id: 'eternalCombo',
+      name: '永动连锁',
+      desc: '连锁倍率上限提升到 5.0，起步倍率 +0.15',
+      icon: UpgradeIcon.chain,
+      themeColor: 0xFFFFC978,
+      rarity: UpgradeRarity.legendary,
+      maxStacks: 1,
+      weight: 6,
+      available: (p) => p.comboCap >= 3.3,
+      apply: (p) => p.copyWith(
+        comboCap: 5.0,
+        effects: p.effects.copyWith(comboBaseBonus: p.effects.comboBaseBonus + 0.15),
+      ),
+    ),
+    Upgrade(
+      id: 'moonBlessing',
+      name: '月华',
+      desc: '必杀消耗 -40% · 每回合自动 +12 怒气',
+      icon: UpgradeIcon.moon,
+      themeColor: 0xFFFFD34D,
+      rarity: UpgradeRarity.legendary,
+      maxStacks: 1,
+      weight: 6,
+      available: (p) => p.ultimateBonusDamage >= 240,
+      apply: (p) => p.copyWith(
+        effects: p.effects.copyWith(
+          ultimateCostMul: 0.6,
+          ragePerTurn: p.effects.ragePerTurn + 12,
+        ),
+      ),
+    ),
   ];
 
   static Upgrade? byId(String id) {
@@ -257,23 +499,41 @@ class UpgradePool {
   }
 
   /// 抽 [count] 张候选牌：按权重随机、不重复，并过滤掉已经叠满或前置不满足的。
+  ///
+  /// [depth] 是当前进度（无尽模式传波次 - 1）。它只影响**稀有度的权重**：
+  /// 走得越深，稀有与传说越容易露面。这是肉鸽的节奏——前期用普通牌铺底，
+  /// 后期让质变牌把 build 推向夸张的高度。
+  ///
+  /// [roguelike] 打开后才启用肉鸽层：稀有度分层、保底，以及全部非普通牌。
+  /// 战役只有五次选择机会，质变与代价都来不及展开反而会搅乱那条紧凑的
+  /// 成长线，所以默认关闭——候选池与稀有度权重都和改造前逐字一致。
   static List<Upgrade> roll({
     required PlayerProfile profile,
     required Map<String, int> taken,
     required math.Random rng,
     int count = 3,
+    int depth = 0,
+    bool roguelike = false,
   }) {
     final candidates = <Upgrade>[
       for (final u in all)
-        if ((taken[u.id] ?? 0) < u.maxStacks && (u.available?.call(profile) ?? true)) u,
+        if ((taken[u.id] ?? 0) < u.maxStacks &&
+            (u.available?.call(profile) ?? true) &&
+            (roguelike || u.rarity == UpgradeRarity.common))
+          u,
     ];
+    if (candidates.isEmpty) return const [];
+
     final picked = <Upgrade>[];
     while (picked.length < count && candidates.isNotEmpty) {
-      final total = candidates.fold<int>(0, (sum, u) => sum + u.weight);
+      final total = candidates.fold<int>(
+        0,
+        (sum, u) => sum + _weightOf(u, depth, roguelike),
+      );
       var ticket = rng.nextInt(total < 1 ? 1 : total);
       var chosen = candidates.length - 1;
       for (var i = 0; i < candidates.length; i++) {
-        ticket -= candidates[i].weight;
+        ticket -= _weightOf(candidates[i], depth, roguelike);
         if (ticket < 0) {
           chosen = i;
           break;
@@ -281,6 +541,52 @@ class UpgradePool {
       }
       picked.add(candidates.removeAt(chosen));
     }
+
+    // 保底：走得够深时，每 3 波（第 3、6、9……波）至少要有一张稀有以上。
+    // 没有这条规则，运气差的玩家可能连着几波都摸不到任何质变，
+    // "越打越有花样"的承诺就断了。
+    final guaranteedWave = roguelike && depth >= 2 && (depth + 1) % 3 == 0;
+    if (guaranteedWave &&
+        picked.length == count &&
+        picked.every((u) => u.rarity == UpgradeRarity.common)) {
+      // 稀有池抽空（全叠满）时退到传说——"稀有以上"的承诺不能因为
+      // 某一边抽空就落空，只要池里还剩任何质变牌就该发出来。
+      final fallback = _pickByRarity(candidates, UpgradeRarity.rare, rng) ??
+          _pickByRarity(candidates, UpgradeRarity.legendary, rng);
+      if (fallback != null) picked[picked.length - 1] = fallback;
+    }
     return picked;
+  }
+
+  /// 单条强化的实际抽取权重。
+  ///
+  /// 战役（[roguelike] 为 false）就是它自己的权重，与改造前逐字一致；
+  /// 无尽模式按稀有度加成，加成随 [depth] 增长到封顶。普通牌也乘一个基数，
+  /// 否则"稀有度加成"会把权重尺度拉乱，稀有反而比普通还常见。
+  static int _weightOf(Upgrade u, int depth, bool roguelike) {
+    if (!roguelike) return u.weight;
+    final d = depth < 0 ? 0 : depth;
+    return switch (u.rarity) {
+      UpgradeRarity.common => u.weight * 10,
+      UpgradeRarity.rare => u.weight * (6 + math.min(d, 20) * 8 ~/ 5),
+      UpgradeRarity.legendary => u.weight * (3 + math.min(d, 24) * 3 ~/ 2),
+    };
+  }
+
+  /// 从候选里按权重挑一张指定稀有度的牌；没有就返回 null。
+  static Upgrade? _pickByRarity(
+    List<Upgrade> pool,
+    UpgradeRarity rarity,
+    math.Random rng,
+  ) {
+    final matches = [for (final u in pool) if (u.rarity == rarity) u];
+    if (matches.isEmpty) return null;
+    final total = matches.fold<int>(0, (sum, u) => sum + u.weight);
+    var ticket = rng.nextInt(total < 1 ? 1 : total);
+    for (final u in matches) {
+      ticket -= u.weight;
+      if (ticket < 0) return u;
+    }
+    return matches.last;
   }
 }

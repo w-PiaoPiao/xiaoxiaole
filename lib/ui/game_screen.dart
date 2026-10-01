@@ -12,6 +12,7 @@ import '../engine/endless.dart';
 import '../engine/gem.dart';
 import '../engine/levels.dart';
 import '../engine/move_advisor.dart';
+import '../engine/roguelike.dart';
 import '../engine/upgrades.dart';
 import 'battle_view.dart';
 import 'board_view.dart';
@@ -465,7 +466,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       await _pause(0.15);
       if (_disposed || run != _runId) return;
 
-      final steps = engine.resolveSwap(a, b);
+      // 玩家的棋盘规则（棱镜宗师 / 爆破工程 / 十字破空）在这里注入：
+      // 棋盘引擎本身不认识 build，规则是显式传进去的。
+      final steps = engine.resolveSwap(a, b, rules: state.profile.boardRules);
       if (steps.isEmpty) {
         engine.swapCells(a, b);
         fx.applySnapshot(engine.snapshot(), fallDuration: 0.16);
@@ -525,7 +528,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       await _pause(0.5);
       if (_disposed || run != _runId) return;
 
-      final steps = engine.resolveUltimate(centerIndex);
+      // 与普通交换一样带上玩家的棋盘规则：连锁里被波及的强化宝石
+      // 也要按 build 引爆（「爆破工程」的必杀同样是 5x5）。
+      final steps = engine.resolveUltimate(centerIndex, rules: state.profile.boardRules);
       // 倍率取自这一局的档案：换局后 _profile 可能已经变了。
       await _playSteps(run, engine, state, steps, multiplier: state.profile.ultimateMultiplier);
       await _finishTurn(run, engine, state);
@@ -789,6 +794,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             profile: _profile,
             taken: _taken,
             rng: _runRng,
+            depth: _levelIndex,
+            // 肉鸽层只在无尽模式启用：战役一共只有五次选择机会，稀有度分层
+            // 与质变牌都来不及展开，反而会把那条紧凑的成长线搅乱。
+            roguelike: !campaign,
           )
         : const <Upgrade>[];
 
@@ -949,6 +958,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           );
         case CombatEventKind.healBlocked:
           fx.addFloat('治疗 -${e.amount}', const Color(0xFFE85A7A), nx: _laneRight, ny: 0.74, size: 17);
+        case CombatEventKind.selfBleed:
+          // 代价类强化的自损：让玩家每次都被提醒"这份力量是买来的"。
+          fx.addFloat('代价 -${e.amount}', const Color(0xFFFF3B5C), nx: _laneRight, ny: 0.70, size: 18);
         case CombatEventKind.rageDrain:
           fx.addFloat('怒气 -${e.amount}', const Color(0xFF57E0C8), nx: _laneRight, ny: 0.74, size: 17);
         case CombatEventKind.enemyAttack:
@@ -1093,14 +1105,16 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                     ),
                     const SizedBox(height: 6),
                     EnergyBar(
-                      value: battle.rage / profile.maxRage,
+                      // 分母用实际消耗：拿到「月华」之后 60 点怒气就能放必杀，
+                      // 进度条与文案也要跟着变，否则玩家看不出这张牌在起作用。
+                      value: (battle.rage / battle.ultimateCost).clamp(0.0, 1.0),
                       color: Palette.rage,
                       leading: '怒气',
                       trailing: battle.rageReady
                           ? '就绪'
-                          : (tight ? '${battle.rage}' : '${battle.rage}/${profile.maxRage}'),
+                          : (tight ? '${battle.rage}' : '${battle.rage}/${battle.ultimateCost}'),
                       height: 10,
-                      semanticLabel: '怒气 ${battle.rage} / ${profile.maxRage}',
+                      semanticLabel: '怒气 ${battle.rage} / ${battle.ultimateCost}',
                     ),
                   ],
                 ),
@@ -1147,7 +1161,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                     ? '点击棋盘落点'
                     : (battle.rageReady
                         ? '自选落点'
-                        : '怒气 ${battle.rage}/${profile.maxRage}'),
+                        : '怒气 ${battle.rage}/${battle.ultimateCost}'),
                 enabled: battle.rageReady && !_busy && !battle.isOver,
                 color: _aimingUltimate ? Palette.danger : Palette.rage,
                 onTap: _armUltimate,
@@ -1303,6 +1317,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     final won = battle.isWon;
     final endless = widget.mode == GameMode.endless;
     final lastLevel = !endless && _levelIndex >= Campaign.levels.length - 1;
+    // 三选一是肉鸽的招牌时刻：小屏上把标题与间距收紧一档，让三张牌
+    // 一屏全见，而不是要滚动才能看到第三张。没有牌可选的结算不受影响。
+    final tightOffer = _offer.isNotEmpty &&
+        MediaQuery.sizeOf(context).width < 380;
     return Positioned.fill(
       child: Container(
         color: Colors.black.withValues(alpha: 0.84),
@@ -1323,21 +1341,24 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
               ],
             ),
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 26),
+              padding: EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: tightOffer ? 16 : 26,
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
                     won ? (_campaignClear ? '通关' : '胜利') : (endless ? '终局' : '败北'),
                     style: AppText.title.copyWith(
-                      fontSize: 44,
+                      fontSize: tightOffer ? 34 : 44,
                       color: won ? Palette.gold : Palette.danger,
                       letterSpacing: 8,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  SizedBox(height: tightOffer ? 4 : 10),
                   if (won) _starRow(),
-                  const SizedBox(height: 10),
+                  SizedBox(height: tightOffer ? 4 : 10),
                   Text(
                     won
                         ? (_campaignClear
@@ -1346,17 +1367,20 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                                 ? '${level.enemy.name} 已被击退'
                                 : '${level.enemy.name} 已被击败')
                         : (endless ? '倒在第 ${_levelIndex + 1} 波' : '再来一次'),
-                    style: AppText.label.copyWith(fontSize: 13),
+                    style: AppText.label.copyWith(fontSize: tightOffer ? 12 : 13),
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 22),
+                  SizedBox(height: tightOffer ? 10 : 22),
                   // 有强化可选时把战绩压成两行：三张强化卡才是这一屏的主角，
                   // 320 像素的小屏上给它们腾出空间，免得要滚动才看得全。
                   if (_offer.isNotEmpty)
                     Text(
                       '连击 x$_maxCombo · 总伤害 $_totalDamage\n'
                       '$_turnsThisLevel 回合 · 剩余生命 ${battle.playerHp}',
-                      style: AppText.label.copyWith(fontSize: 12, height: 1.9),
+                      style: AppText.label.copyWith(
+                        fontSize: 12,
+                        height: tightOffer ? 1.45 : 1.9,
+                      ),
                       textAlign: TextAlign.center,
                     )
                   else ...[
@@ -1379,7 +1403,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                         style: AppText.label.copyWith(fontSize: 11),
                       ),
                   ],
-                  const SizedBox(height: 22),
+                  SizedBox(height: tightOffer ? 10 : 22),
                   // 胜利且还有下一关：这里不是"继续"按钮，而是三选一。
                   // 每一次选择都会跟着玩家走进下一关，这是全局唯一的成长曲线。
                   if (_offer.isNotEmpty)
@@ -1425,6 +1449,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
 
   Widget _upgradePicker() {
     final total = _taken.values.fold<int>(0, (sum, n) => sum + n);
+    // 320 宽的窄屏上，三张卡 + 标题 + 脚注要塞进不到 200 像素：卡片在这里
+    // 收紧一档（更小的图标与内边距、更紧的行距），尽量让三张牌一屏看全。
+    final tight = MediaQuery.sizeOf(context).width < 380;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1445,8 +1472,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
               ),
           ],
         ),
-        const SizedBox(height: 10),
-        for (final upgrade in _offer) _upgradeCard(upgrade),
+        SizedBox(height: tight ? 7 : 10),
+        for (final upgrade in _offer) _upgradeCard(upgrade, tight: tight),
         const SizedBox(height: 4),
         Center(
           child: Text(
@@ -1458,11 +1485,40 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     );
   }
 
-  Widget _upgradeCard(Upgrade upgrade) {
+  /// 稀有度标签。
+  ///
+  /// 稀有度刻意不占用新的色相——卡片的颜色已经在说"这条牌属于哪个流派"
+  /// 了，再叠一层色相语义只会打架。这里改用"文字 + 金/紫罗兰"这套中性标识。
+  Widget _rarityTag(UpgradeRarity rarity, {required bool tight}) {
+    final legendary = rarity == UpgradeRarity.legendary;
+    final color = legendary ? Palette.gold : const Color(0xFFB9A6FF);
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: tight ? 3 : 4, vertical: 1),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.7)),
+      ),
+      child: Text(
+        legendary ? '传说' : '稀有',
+        style: TextStyle(
+          color: color,
+          fontSize: tight ? 8 : 9,
+          fontWeight: FontWeight.w800,
+          height: 1.1,
+        ),
+      ),
+    );
+  }
+
+  Widget _upgradeCard(Upgrade upgrade, {required bool tight}) {
     final color = Color(upgrade.themeColor);
     final stacks = _taken[upgrade.id] ?? 0;
+    final legendary = upgrade.rarity == UpgradeRarity.legendary;
+    final rare = upgrade.rarity != UpgradeRarity.common;
+    final iconSide = tight ? 30.0 : 38.0;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 9),
+      padding: EdgeInsets.only(bottom: tight ? 6 : 9),
       child: Semantics(
         button: true,
         label: '${upgrade.name}，${upgrade.desc}',
@@ -1470,7 +1526,12 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
         child: GestureDetector(
           onTap: () => _takeUpgrade(upgrade),
           child: Container(
-            padding: const EdgeInsets.fromLTRB(11, 10, 12, 10),
+            padding: EdgeInsets.fromLTRB(
+              tight ? 9 : 11,
+              tight ? 7 : 10,
+              tight ? 10 : 12,
+              tight ? 7 : 10,
+            ),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(14),
               gradient: LinearGradient(
@@ -1479,16 +1540,24 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                   color.withValues(alpha: 0.06),
                 ],
               ),
-              border: Border.all(color: color.withValues(alpha: 0.62), width: 1.2),
+              // 稀有度靠"描边更重、光晕更强"表达：一眼能看出这张牌不一样，
+              // 又不会和功能配色抢意思。
+              border: Border.all(
+                color: color.withValues(alpha: rare ? 0.95 : 0.62),
+                width: legendary ? 2.2 : (rare ? 1.7 : 1.2),
+              ),
               boxShadow: [
-                BoxShadow(color: color.withValues(alpha: 0.22), blurRadius: 16),
+                BoxShadow(
+                  color: color.withValues(alpha: legendary ? 0.42 : (rare ? 0.30 : 0.22)),
+                  blurRadius: legendary ? 22 : (rare ? 18 : 16),
+                ),
               ],
             ),
             child: Row(
               children: [
                 SizedBox(
-                  width: 38,
-                  height: 38,
+                  width: iconSide,
+                  height: iconSide,
                   // 图标本身是静态的，加一层 RepaintBoundary 免得跟着面板一起重绘。
                   child: RepaintBoundary(
                     child: CustomPaint(
@@ -1496,7 +1565,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                SizedBox(width: tight ? 8 : 12),
                 Expanded(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -1504,11 +1573,15 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                     children: [
                       Row(
                         children: [
+                          if (rare) ...[
+                            _rarityTag(upgrade.rarity, tight: tight),
+                            const SizedBox(width: 5),
+                          ],
                           Flexible(
                             child: Text(
                               upgrade.name,
                               style: AppText.button.copyWith(
-                                fontSize: 15,
+                                fontSize: tight ? 13 : 15,
                                 color: Palette.textPrimary,
                                 letterSpacing: 1,
                               ),
@@ -1526,13 +1599,40 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                         ],
                       ),
                       const SizedBox(height: 3),
-                      Text(
-                        upgrade.desc,
-                        style: AppText.label.copyWith(
-                          fontSize: 11.5,
-                          height: 1.35,
-                          color: Palette.textPrimary.withValues(alpha: 0.82),
-                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // 代价型强化用一个小红点 + 红字提示：不额外占一行，
+                          // 但玩家一眼就知道"这条不是白拿的"。
+                          if (upgrade.isCostly) ...[
+                            Padding(
+                              padding: const EdgeInsets.only(top: 3.5),
+                              child: Container(
+                                width: 6,
+                                height: 6,
+                                decoration: const BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Palette.danger,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                          ],
+                          Expanded(
+                            child: Text(
+                              upgrade.desc,
+                              style: AppText.label.copyWith(
+                                fontSize: tight ? 10.5 : 11.5,
+                                height: 1.3,
+                                color: upgrade.isCostly
+                                    ? const Color(0xFFFF8095)
+                                    : Palette.textPrimary.withValues(alpha: 0.82),
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),

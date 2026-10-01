@@ -88,19 +88,40 @@ enum PickStyle {
   survival,
 }
 
-const _damageIds = {'blade', 'crit', 'critDamage', 'special', 'combo', 'curse', 'desperate', 'ultimate'};
-const _survivalIds = {'guard', 'harden', 'heal', 'regen', 'vitality'};
+const _damageIds = {
+  'blade', 'crit', 'critDamage', 'special', 'combo', 'curse', 'desperate', 'ultimate',
+  // 肉鸽层：直接把伤害抬起来的牌。
+  'bloodPact', 'ascetic', 'rageEngine',
+  // 棋盘质变本质上是"同样的手数打出更多消除"，也算输出。
+  'crossStrike', 'demolition', 'prismMaster',
+  'plague', 'eternalCombo', 'moonBlessing',
+};
+const _survivalIds = {
+  'guard', 'harden', 'heal', 'regen', 'vitality',
+  // 肉鸽层：把别的资源接进护盾的联动牌。
+  'overcrit', 'overflowGuard', 'thornGuard',
+};
 
 int _pickIndex(PickStyle style, List<Upgrade> offer) {
   switch (style) {
     case PickStyle.first:
       return 0;
     case PickStyle.damage:
-      final i = offer.indexWhere((u) => _damageIds.contains(u.id));
+      // 「苦修」对输出流是陷阱：+90% 红伤的代价是把输出流顺手的护盾
+      // 资源整个清零。会读卡的输出玩家会绕开它，血契这种纯买卖才拿。
+      final i = offer.indexWhere(
+        (u) => _damageIds.contains(u.id) && u.id != 'ascetic',
+      );
       return i >= 0 ? i : 0;
     case PickStyle.survival:
-      final i = offer.indexWhere((u) => _survivalIds.contains(u.id));
-      return i >= 0 ? i : 0;
+      // 保命玩家会读卡面：带代价的牌（自损、封盾）直接跳过，宁可拿别的。
+      final safe = [
+        for (final u in offer)
+          if (!u.isCostly) u,
+      ];
+      final pool = safe.isNotEmpty ? safe : offer;
+      final i = pool.indexWhere((u) => _survivalIds.contains(u.id));
+      return offer.indexOf(i >= 0 ? pool[i] : pool.first);
   }
 }
 
@@ -231,8 +252,11 @@ void _campaignReport(int rounds) {
 
 // ------------------------------------------------------------ 无尽模式推演
 
-/// 打无尽模式直到倒下，返回倒下的波次（即通过波数 + 1）。
-int simulateEndless({required int seed}) {
+/// 打无尽模式直到倒下，返回（倒下的波次 = 通过波数 + 1，吃下的强化）。
+///
+/// 无尽模式启用肉鸽层：三选一带稀有度分层与保底，棋盘质变也会真正
+/// 注入 `resolveSwap`——否则报告读到的强度比玩家实际体验的弱。
+(int, Map<String, int>) simulateEndless({required int seed, PickStyle style = PickStyle.damage}) {
   var profile = Campaign.player;
   var carryHp = profile.maxHp;
   final taken = <String, int>{};
@@ -256,13 +280,14 @@ int simulateEndless({required int seed}) {
         continue;
       }
       board.swapCells(move.a, move.b);
-      for (final step in board.resolveSwap(move.a, move.b)) {
+      for (final step in board.resolveSwap(move.a, move.b, rules: profile.boardRules)) {
         battle.applyClear(step.counts, combo: step.combo, specialBonus: step.specialBonus);
       }
       if (battle.canCastUltimate) {
         battle.castUltimate();
         for (final step in board.resolveUltimate(
           board.index(BoardEngine.cols ~/ 2, BoardEngine.rows ~/ 2),
+          rules: profile.boardRules,
         )) {
           battle.applyClear(
             step.counts,
@@ -275,13 +300,17 @@ int simulateEndless({required int seed}) {
       battle.endPlayerTurn();
       turns++;
     }
-    if (!battle.isWon) return wave;
+    if (!battle.isWon) return (wave, taken);
 
-    final offer = UpgradePool.roll(profile: profile, taken: taken, rng: rng);
+    final offer = UpgradePool.roll(
+      profile: profile,
+      taken: taken,
+      rng: rng,
+      depth: wave - 1,
+      roguelike: true,
+    );
     if (offer.isNotEmpty) {
-      // 输出优先：无尽模式里活命靠的是把敌人更快打死。
-      final i = offer.indexWhere((u) => _damageIds.contains(u.id));
-      final choice = offer[i >= 0 ? i : 0];
+      final choice = offer[_pickIndex(style, offer)];
       profile = choice.apply(profile);
       taken[choice.id] = (taken[choice.id] ?? 0) + 1;
     }
@@ -293,22 +322,38 @@ int simulateEndless({required int seed}) {
       ),
     );
   }
-  return 61;
+  return (61, taken);
 }
 
 void _endlessReport(int rounds) {
   print('');
-  print('无尽模式（输出优先的 build，每过一波吃一条强化）');
-  final fallen = <int>[];
-  for (var seed = 1; seed <= rounds; seed++) {
-    fallen.add(simulateEndless(seed: seed));
+  print('无尽模式（肉鸽层开启：稀有度随波次上升 + 每 3 波保底稀有）');
+  print('策略        最差  中位  最佳   典型 build');
+  for (final style in [PickStyle.damage, PickStyle.survival]) {
+    final fallen = <int>[];
+    Map<String, int> sample = const {};
+    for (var seed = 1; seed <= rounds; seed++) {
+      final (wave, taken) = simulateEndless(seed: seed, style: style);
+      fallen.add(wave);
+      sample = taken;
+    }
+    final sorted = [...fallen]..sort();
+    final best = sorted.last - 1;
+    final median = sorted[rounds ~/ 2] - 1;
+    final worst = sorted.first - 1;
+    final build = (sample.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
+        .take(4)
+        .map((e) => '${e.key}x${e.value}')
+        .join(' ');
+    print(
+      '${style.name.padRight(12)}'
+      '${worst.toString().padRight(6)}'
+      '${median.toString().padRight(6)}'
+      '${best.toString().padRight(7)}'
+      '$build',
+    );
+    print('  各局通过波数: ${fallen.map((w) => w - 1).join(', ')}');
   }
-  fallen.sort();
-  final best = fallen.last - 1;
-  final median = fallen[rounds ~/ 2] - 1;
-  final worst = fallen.first - 1;
-  print('种子数 $rounds · 最差 $worst 波 · 中位 $median 波 · 最佳 $best 波');
-  print('各局通过波数: ${fallen.map((w) => w - 1).join(', ')}');
 }
 
 void main() {
@@ -357,5 +402,5 @@ void main() {
   }
 
   _campaignReport(10);
-  _endlessReport(8);
+  _endlessReport(24);
 }

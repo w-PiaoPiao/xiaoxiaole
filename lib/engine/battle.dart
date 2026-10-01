@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'gem.dart';
 import 'levels.dart';
+import 'roguelike.dart';
 
 /// 战斗阶段。
 enum BattlePhase { playing, won, lost }
@@ -34,6 +35,9 @@ enum CombatEventKind {
 
   /// 这一下打出了暴击（单独一条事件，UI 用它加一次强调演出）。
   crit,
+
+  /// 代价类强化在回合开始时的自损（「血契」）。UI 用它提示代价正在生效。
+  selfBleed,
 
   /// 敌人攻击玩家。[amount] 是这次攻击的原始伤害（护盾抵挡的部分另见
   /// [CombatEventKind.playerShield]），实际掉血为两者之差。
@@ -138,7 +142,14 @@ class BattleState {
 
   double get playerHpRatio => (playerHp / profile.maxHp).clamp(0.0, 1.0);
 
-  bool get rageReady => rage >= profile.ultimateCost;
+  /// 肉鸽质变与代价（无尽模式的强化写入这里）。
+  RoguelikeEffects get fx => profile.effects;
+
+  /// 释放必杀需要的怒气（「月华」会打折）。
+  int get ultimateCost =>
+      (profile.ultimateCost * fx.ultimateCostMul).round().clamp(1, profile.maxRage);
+
+  bool get rageReady => rage >= ultimateCost;
 
   /// 敌方单次攻击的伤害上限（相对玩家最大生命的比例）。
   ///
@@ -173,8 +184,10 @@ class BattleState {
   /// 是否处于「敌人即将出手」的紧张状态。
   bool get dangerImminent => turnsToAttack <= 1;
 
-  /// 连锁序号对应的伤害倍率。上限默认 2.5 倍，「无尽连击」会把它抬高。
-  double comboMultiplier(int combo) => min(1 + 0.25 * (combo - 1), profile.comboCap);
+  /// 连锁序号对应的伤害倍率。上限默认 2.5 倍，「无尽连击」会把它抬高；
+  /// 「永动连锁」连起步倍率一起抬。
+  double comboMultiplier(int combo) =>
+      min(1 + fx.comboBaseBonus + 0.25 * (combo - 1), profile.comboCap);
 
   /// 是否处于「逆境」（残血）。残血时「狂骨」类强化会提高伤害。
   bool get desperate => playerHpRatio < PlayerProfile.desperateThreshold;
@@ -210,16 +223,31 @@ class BattleState {
     final comboMul = comboMultiplier(combo);
     final curseMul = 1 + profile.curseBonus * curseStacks;
     final desperateMul = _desperateMul;
+    // 「处决者」：残血的敌人挨得更疼。
+    final executeMul = fx.executeThreshold > 0 && enemyHpRatio < fx.executeThreshold
+        ? 1 + fx.executeBonus
+        : 1.0;
 
     final reds = counts[GemType.red] ?? 0;
     if (reds > 0) {
       final crit = _rollCrit(events);
       final raw = reds * profile.redDamage * comboMul * curseMul * multiplier *
-          desperateMul * crit;
-      _damageEnemy(raw.round(), events);
+          desperateMul * executeMul * fx.damageMul * crit;
+      final dealt = raw.round();
+      _damageEnemy(dealt, events);
+      // 「过量暴击」：这一下暴击溢出的力量，顺手结成了护盾。
+      if (crit > 1.0 && fx.critToShield > 0) {
+        _gainShield((dealt * fx.critToShield).round(), events);
+      }
     }
 
-    final bonus = (specialBonus * multiplier * profile.specialPower).round();
+    // 「瘟疫」：每一层易伤都让强化宝石打得更狠。
+    final bonus = (specialBonus *
+            multiplier *
+            profile.specialPower *
+            fx.damageMul *
+            (1 + fx.curseToSpecialPower * curseStacks))
+        .round();
     if (bonus > 0) {
       final crit = _rollCrit(events);
       _damageEnemy((bonus * crit).round(), events);
@@ -229,10 +257,7 @@ class BattleState {
     final blues = counts[GemType.blue] ?? 0;
     if (blues > 0) {
       final gain = (blues * profile.blueShield * multiplier).round();
-      final before = shield;
-      shield = min(profile.maxShield, shield + gain);
-      final actual = shield - before;
-      if (actual > 0) events.add(CombatEvent(CombatEventKind.shieldGain, actual));
+      _gainShield(gain, events);
     }
 
     final greens = counts[GemType.green] ?? 0;
@@ -249,15 +274,24 @@ class BattleState {
       playerHp = min(profile.maxHp, playerHp + healAmount);
       final actual = playerHp - before;
       if (actual > 0) events.add(CombatEvent(CombatEventKind.heal, actual));
+      // 「溢流护盾」：治满之后溢出来的那部分，转成护盾。
+      final overflow = healAmount - actual;
+      if (overflow > 0 && fx.healOverflowToShield > 0) {
+        _gainShield((overflow * fx.healOverflowToShield).round(), events);
+      }
     }
 
     final yellows = counts[GemType.yellow] ?? 0;
     if (yellows > 0) {
       final gain = (yellows * profile.yellowRage * multiplier).round();
-      final before = rage;
-      rage = min(profile.maxRage, rage + gain);
-      final actual = rage - before;
+      final actual = _addRage(gain);
       if (actual > 0) events.add(CombatEvent(CombatEventKind.rage, actual));
+      // 「过载引擎」：怒气满了还在攒的那部分，直接烧成伤害。
+      final overflow = gain - actual;
+      if (overflow > 0 && fx.rageOverflowDamage > 0) {
+        final dealt = (overflow * fx.rageOverflowDamage).round();
+        if (dealt > 0) _damageEnemy(dealt, events);
+      }
     }
 
     final purples = counts[GemType.purple] ?? 0;
@@ -271,6 +305,26 @@ class BattleState {
     }
 
     return events;
+  }
+
+  /// 获得护盾。所有护盾来源都走这里——上限与「苦修」的归零只在这一处生效，
+  /// 免得某条新路径绕过代价。
+  void _gainShield(int amount, List<CombatEvent> events) {
+    // 「苦修」的代价在这一层统一执行：蓝宝石、暴击转盾、溢流转盾都绕不过去。
+    final scaled = (amount * fx.shieldGainMul).round();
+    if (scaled <= 0) return;
+    final before = shield;
+    shield = min(profile.maxShield, shield + scaled);
+    final actual = shield - before;
+    if (actual > 0) events.add(CombatEvent(CombatEventKind.shieldGain, actual));
+  }
+
+  /// 积攒怒气，返回实际涨上去的点数（涨不动的溢出部分交给调用方处理）。
+  int _addRage(int amount) {
+    if (amount <= 0) return 0;
+    final before = rage;
+    rage = min(profile.maxRage, rage + amount);
+    return rage - before;
   }
 
   /// 把伤害打到敌人身上（先吃护盾，再扣血，最后结算吸血与狂暴）。
@@ -335,7 +389,8 @@ class BattleState {
   /// 并用 [PlayerProfile.ultimateMultiplier] 作为倍率再次调用 [applyClear]。
   List<CombatEvent> castUltimate() {
     if (!canCastUltimate) return const [];
-    rage = 0;
+    // 「月华」之后消耗会打折，所以扣的是 ultimateCost 而不是档案里的原价。
+    rage = max(0, rage - ultimateCost);
     final events = <CombatEvent>[
       const CombatEvent(CombatEventKind.ultimate, 0, '斩月'),
     ];
@@ -343,7 +398,7 @@ class BattleState {
     // 必杀也吃暴击与逆境加成：攒了半天的怒气打出一次大数字，正是它该有的份量。
     final crit = _rollCrit(events);
     _damageEnemy(
-      (profile.ultimateBonusDamage * crit * _desperateMul).round(),
+      (profile.ultimateBonusDamage * crit * _desperateMul * fx.damageMul).round(),
       events,
     );
     return events;
@@ -366,10 +421,35 @@ class BattleState {
       if (actual > 0) events.add(CombatEvent(CombatEventKind.heal, actual, '回春'));
     }
 
+    // 「月华」：每回合自动蓄怒，必杀从此变成常规手段而不是奢侈品。
+    if (fx.ragePerTurn > 0 && playerHp > 0) {
+      final actual = _addRage(fx.ragePerTurn);
+      if (actual > 0) events.add(CombatEvent(CombatEventKind.rage, actual, '月华'));
+    }
+
+    // 「血契」：力量是拿自己的血换的，每回合先收利息再轮到敌人。
+    // 这一下可以致死——那是选择它时就已经写好的代价。
+    if (fx.selfDamagePerTurn > 0 && playerHp > 0) {
+      playerHp = max(0, playerHp - fx.selfDamagePerTurn);
+      events.add(CombatEvent(CombatEventKind.selfBleed, fx.selfDamagePerTurn, '血契'));
+      log.insert(0, '血契夺走了 ${fx.selfDamagePerTurn} 点生命');
+      if (playerHp <= 0) {
+        phase = BattlePhase.lost;
+        log.insert(0, '你倒下了……');
+        return events;
+      }
+    }
+
     if (curseTurns > 0) {
       curseTurns--;
       if (curseTurns <= 0) {
-        curseStacks = 0;
+        if (fx.cursePersists) {
+          // 「瘟疫」：易伤不再一次性消失，而是每回合腐烂掉一层。
+          curseStacks = max(0, curseStacks - 1);
+          curseTurns = curseStacks > 0 ? 1 : 0;
+        } else {
+          curseStacks = 0;
+        }
       }
     }
     if (healBlockTurns > 0) healBlockTurns--;
@@ -404,6 +484,15 @@ class BattleState {
     ));
     if (absorbed > 0) {
       events.add(CombatEvent(CombatEventKind.playerShield, absorbed));
+    }
+
+    // 「荆棘壁垒」：被护盾扛下来的伤害，有一部分会扎回敌人身上。
+    if (absorbed > 0 && fx.shieldReflect > 0) {
+      final reflected = (absorbed * fx.shieldReflect).round();
+      if (reflected > 0) {
+        log.insert(0, '荆棘反弹 $reflected 点伤害');
+        _damageEnemy(reflected, events);
+      }
     }
     log.insert(0, '${def.name} ${isHeavy ? '重击' : '攻击'} · 受到 $total 点伤害'
         '${absorbed > 0 ? '（护盾抵挡 $absorbed）' : ''}');

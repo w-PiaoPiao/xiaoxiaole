@@ -5,6 +5,7 @@ import 'package:gem_battle/engine/battle.dart';
 import 'package:gem_battle/engine/board.dart';
 import 'package:gem_battle/engine/gem.dart';
 import 'package:gem_battle/engine/levels.dart';
+import 'package:gem_battle/engine/roguelike.dart';
 import 'package:gem_battle/engine/upgrades.dart';
 
 /// 造一份只包含指定强化的档案，层数由传入的次数决定。
@@ -119,8 +120,28 @@ void main() {
             before.curseBonus != after.curseBonus ||
             before.regenPerTurn != after.regenPerTurn ||
             before.damageReduction != after.damageReduction ||
-            before.desperateBonus != after.desperateBonus;
+            before.desperateBonus != after.desperateBonus ||
+            // 肉鸽质变（无尽模式）写在 effects 里：这里只查"有没有变"，
+            // 具体数值行为由 roguelike_test.dart 逐条把关。
+            before.effects != after.effects;
         expect(changed, isTrue, reason: '${upgrade.name} 没有改变任何属性');
+      }
+    });
+
+    test('战役模式（不开肉鸽层）只发普通牌', () {
+      // 质变与代价是无尽模式的风景：战役一共只有五次选择，把血契这类
+      // 代价牌混进去只会把线性成长搅乱。
+      for (var seed = 0; seed < 40; seed++) {
+        final offered = UpgradePool.roll(
+          profile: Campaign.player,
+          taken: const {},
+          rng: math.Random(seed),
+        );
+        expect(
+          offered.where((u) => u.rarity != UpgradeRarity.common),
+          isEmpty,
+          reason: 'seed=$seed 的战役抽取里混进了非普通牌',
+        );
       }
     });
   });
