@@ -101,9 +101,9 @@ void main() {
 
     test('强度最终会压过玩家，且肉鸽层让玩家走得更远', () {
       // 12 个种子的中位通过波数，按 tool/balance_report.dart 的 24 种子数据
-      // 校准。含机关口径、多形态（第 9 波起 2 管、第 16 波起 3 管）与
-      // yellowRage=4 的稀有必杀：damage 流中位 13、survival 流中位 17，
-      // 观测范围 5~43（旧口径——必杀随便放的年代——中位是 20.5）。
+      // 校准。含机关口径、多形态（第 9 波起 3 管、第 16 波起 4 管）、
+      // yellowRage=4 的稀有必杀，以及 [EndlessRoster.attritionRamp] 的
+      // 消耗战惩罚：output 流中位 17、survival 流中位 23，观测 8~47 波。
       //
       // 种子之间的方差很大，所以这里守的是**数量级失衡**：中位掉到 10 以下
       // 说明肉鸽层在拖后腿，涨到 36 以上说明敌人成长压不住了。
@@ -115,7 +115,7 @@ void main() {
         expect(
           wave,
           lessThanOrEqualTo(60),
-          reason: '有人打穿了 60 波，敌人成长太慢（当前观测上界约 43 波）',
+          reason: '有人打穿了 60 波，敌人成长太慢（当前观测上界约 47 波）',
         );
         expect(wave, greaterThan(3), reason: '但也不该死得太快');
       }
@@ -133,6 +133,27 @@ void main() {
         greaterThan(30),
         reason: '至少一个 build 应能走得很深——质变牌要把上限拉开',
       );
+    });
+
+    test('输总是"被打死"，不会磨到回合耗尽', () {
+      // 无尽模式的承诺是"与敌人赛跑，站到站不住为止"。敌人单次伤害封顶
+      // 在 0.65×最大生命，而玩家的续航随强化线性增长——没有时间轴的话，
+      // 强续航 build 会变成"满血站着、敌人也不掉血"的无限平局（实测 8 局
+      // 里 4 局磨满 400 回合）。消耗战惩罚就是为这条守的：僵持越久，
+      // 封顶挡不住的那部分伤害越重。
+      for (final style in [PickStyle.damage, PickStyle.survival]) {
+        for (var seed = 1; seed <= 8; seed++) {
+          final result = playEndless(seed: seed, style: style);
+          expect(
+            result.timedOut,
+            isFalse,
+            reason:
+                '${style.name} seed=$seed 在第 ${result.fallenWave} 波'
+                '磨到回合耗尽仍未分胜负（血没掉完），'
+                '消耗战惩罚可能被封顶吃掉了',
+          );
+        }
+      }
     });
   });
 }

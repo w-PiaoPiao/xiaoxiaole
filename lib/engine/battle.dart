@@ -122,6 +122,12 @@ class BattleState {
   /// 敌人已经出手的次数。
   int attackCount = 0;
 
+  /// 本场战斗已经结束的玩家回合数。
+  ///
+  /// 只服务于消耗战惩罚（[EnemyDef.attritionRamp]）：它按时间轴给敌人加压，
+  /// 让"打不动"的僵持对局最终能分出胜负，而不是双方都不掉血地磨到超时。
+  int playerTurns = 0;
+
   /// 棋盘上的毒藤数量：每株让敌人的攻击 +[vineAttackBonus]。
   ///
   /// 战斗层不认识棋盘，这个值由 GameScreen 在每个回合开始前从棋盘同步进来；
@@ -180,6 +186,8 @@ class BattleState {
   ///
   /// 0.65：重击（顶满封顶）大约打掉六成半血——够痛，逼玩家认真对待预警，
   /// 但两连重击依然留一条命；普通攻击都设计在封顶之下，倍率才有意义。
+  ///
+  /// 「不屈」会把它压到 0.4，那是"不被一击秒杀"的直接解。
   static const double singleHitCapRatio = 0.65;
 
   /// 敌人的下一次攻击是否是重击。
@@ -193,7 +201,7 @@ class BattleState {
   /// 误判（重击在封顶下能差出上百点）。
   int get incomingDamage => _predictAttackDamage(nextAttackIsHeavy);
 
-  /// 预测一次攻击的最终伤害。[isHeavy] 决定是否按重击计算。
+  /// 本次攻击的预测伤害，[isHeavy] 决定是否按重击计算。
   ///
   /// 顺序是刻意的：「硬化」减伤在封顶**之前**结算——上限保护的是玩家能
   /// 承受的最大一击，不该被减伤绕过。
@@ -208,11 +216,33 @@ class BattleState {
     // 毒藤：缠在棋盘上的藤蔓每一株都在给敌人加码，清掉才停。
     if (vineCount > 0) raw *= 1 + vineCount * vineAttackBonus;
     if (profile.damageReduction > 0) raw *= 1 - profile.damageReduction;
-    // 「不屈」把单次受击的上限压得更低：这是"不被一刀秒"的直接解。
     final capRatio = fx.hitCapRatio > 0 ? fx.hitCapRatio : singleHitCapRatio;
     final cap = (profile.maxHp * capRatio).round();
     if (raw > cap) raw = cap.toDouble();
+    // 消耗战惩罚**在封顶之后**结算，这是刻意的：封顶是个绝对天花板，
+    // 乘在它前面的系数（攻击成长、狂暴、毒藤、僵持惩罚）超过天花板后
+    // 全部作废——实测把惩罚放在封顶前，"打不动"的对局依然能满血磨到
+    // 400 回合。僵持越久、上限保护越挡不住，才是这条曲线该有的样子。
+    raw *= _attritionMul;
     return raw.round();
+  }
+
+  /// 消耗战惩罚的起点（第几个玩家回合开始加压）与步进。
+  ///
+  /// 100 回合、每 12 回合 +12%：正常的一波在 20~30 回合内结束，打得动的
+  /// build 根本碰不到它；僵住的局（实测能磨到 200~400 回合）会被它逐步
+  /// 收掉——既保住"输出流靠手速换生存"的价值，也让无尽模式不会停在
+  /// "双方都不掉血"的无限平局上。阈值刻意取得很晚：它是"僵持"的解药，
+  /// 不该变成对所有慢节奏 build 的常规惩罚。
+  static const int attritionStartTurn = 100;
+  static const int attritionEveryTurns = 12;
+
+  /// 消耗战惩罚的当前倍率（没有僵持就是 1.0）。
+  double get _attritionMul {
+    if (def.attritionRamp <= 0 || playerTurns < attritionStartTurn) return 1.0;
+    final steps =
+        (playerTurns - attritionStartTurn) ~/ attritionEveryTurns + 1;
+    return 1 + def.attritionRamp * steps;
   }
 
   /// 是否处于「敌人即将出手」的紧张状态。
@@ -564,6 +594,16 @@ class BattleState {
     }
     if (healBlockTurns > 0) healBlockTurns--;
 
+    // 消耗战惩罚的时钟：在敌人结算"这一击"之前先记上本回合，
+    // 于是同一回合的预警与实际伤害读到的是同一个倍率。
+    playerTurns++;
+    // 惩罚生效的第一回合给一条明确提示：接下来的预警数字会一直变大，
+    // 玩家该知道那不是错觉。强续航 build 的一波本来就常有 60 回合以上，
+    // 这条曲线对它们不是罕见事件。
+    if (def.attritionRamp > 0 && playerTurns == attritionStartTurn) {
+      events.add(const CombatEvent(CombatEventKind.info, 0, '僵持：攻势增强'));
+      log.insert(0, '僵持太久，${def.name} 的每一击都变得更重');
+    }
     turnsToAttack--;
     if (turnsToAttack <= 0) {
       events.addAll(_enemyAct());

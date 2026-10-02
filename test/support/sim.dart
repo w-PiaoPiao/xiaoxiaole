@@ -107,6 +107,13 @@ class SimResult {
   final int enemyHp;
   final int enemyAttacks;
 
+  /// 整场战斗里玩家的**最低生命比例**。
+  ///
+  /// 只看打完剩多少血会掩盖过程：玩家掉到三成再补回满血，与全程不掉血
+  /// 的终局读数完全一样，但两者的压力天差地别。这一项才是"这一关有没有
+  /// 威胁"的直接读数，也是关卡数值校准的主指标。
+  final double minHpRatio;
+
   const SimResult({
     required this.won,
     required this.lost,
@@ -114,6 +121,7 @@ class SimResult {
     required this.playerHp,
     required this.enemyHp,
     required this.enemyAttacks,
+    this.minHpRatio = 1.0,
   });
 }
 
@@ -141,6 +149,7 @@ SimResult fight(
       ? _balancedAdvisor
       : _berserkAdvisor;
   var turns = 0;
+  var minHp = battle.playerHp;
 
   while (!battle.isOver && turns < maxTurns) {
     final move = advisor.suggest(board, battle);
@@ -178,6 +187,8 @@ SimResult fight(
     // 毒藤每一株都在给敌人加码：与 GameScreen 同一口径（进敌方回合前同步）。
     battle.vineCount = board.countObstacles(ObstacleKind.vine);
     battle.endPlayerTurn();
+    // 每回合的血量低点只可能出现在敌方行动之后，这里取一次就够。
+    if (battle.playerHp < minHp) minHp = battle.playerHp;
     turns++;
   }
 
@@ -188,6 +199,9 @@ SimResult fight(
     playerHp: battle.playerHp,
     enemyHp: battle.enemyHp,
     enemyAttacks: battle.attackCount,
+    minHpRatio: profile.maxHp <= 0
+        ? 1.0
+        : (minHp / profile.maxHp).clamp(0.0, 1.0),
   );
 }
 
@@ -285,6 +299,13 @@ class EndlessResult {
   /// 倒下的波次（从 1 开始）；打穿 [maxWave] 时返回 maxWave + 1。
   final int fallenWave;
 
+  /// 倒下的那一波是不是"打不动"——血没掉完，但回合数先耗尽。
+  ///
+  /// 它必须永远是 false。无尽模式的承诺是"与敌人赛跑，站到站不住为止"；
+  /// 而"打不动"意味着玩家满血满盾、敌人也不掉血地磨到超时——那不是失败，
+  /// 是卡住。守住这一条，就守住了 [EndlessRoster.attritionRamp] 存在的意义。
+  final bool timedOut;
+
   final Map<String, int> taken;
   final PlayerProfile profile;
 
@@ -292,6 +313,7 @@ class EndlessResult {
     required this.fallenWave,
     required this.taken,
     required this.profile,
+    this.timedOut = false,
   });
 
   /// 通过的波数（倒下的那一波不算通过）。
@@ -321,7 +343,13 @@ EndlessResult playEndless({
       playerHp: carryHp,
     );
     if (!result.won) {
-      return EndlessResult(fallenWave: wave, taken: taken, profile: profile);
+      return EndlessResult(
+        fallenWave: wave,
+        taken: taken,
+        profile: profile,
+        // 血没掉完却先耗尽了回合：这一局是"磨死"的，不是"打死"的。
+        timedOut: !result.lost,
+      );
     }
 
     final offer = UpgradePool.roll(

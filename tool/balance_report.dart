@@ -20,11 +20,19 @@ import 'package:gem_battle/engine/levels.dart';
 import '../test/support/sim.dart';
 
 void _singleLevelReport(int seeds) {
-  print('关卡 敌人        血量  正常:胜/负/僵  回合  我方残血     莽夫:胜/负  回合  莽夫残血  敌出手  正常局敌残');
+  // 「最低血」是这里最重要的一列：只看打完剩多少血会掩盖过程——玩家掉到
+  // 三成再补回满血，与全程不掉血的终局读数一样，但压力天差地别。前一版
+  // 报告只有终局残血，于是"前四关敌人每回合输出低于玩家续航"这个失衡
+  // 一直没被发现（净收支全为正，玩家在打木桩）。
+  print(
+    '关卡 敌人        血量  正常:胜/负/僵  回合  终局残血   最低血(均/最差)   '
+    '莽夫:胜/负  回合  莽夫残血  敌出手',
+  );
   for (var level = 0; level < Campaign.levels.length; level++) {
     final def = Campaign.levels[level].enemy;
-    var bw = 0, bl = 0, bt = 0, bturns = 0, bEnemyLeft = 0.0, bu = 0, bul = 0;
+    var bw = 0, bl = 0, bt = 0, bturns = 0, bu = 0, bul = 0;
     var bHp = 0, bBerserkHp = 0, bTurns = 0, bAttacks = 0;
+    var bMinSum = 0.0, bMinWorst = 1.0;
     for (var seed = 1; seed <= seeds; seed++) {
       final a = fight(Campaign.levels[level], seed: seed);
       if (a.won) {
@@ -35,8 +43,9 @@ void _singleLevelReport(int seeds) {
         bt++;
       }
       bturns += a.turns;
-      bEnemyLeft += a.enemyHp / def.maxHp * 100;
       bHp += a.playerHp;
+      bMinSum += a.minHpRatio;
+      if (a.minHpRatio < bMinWorst) bMinWorst = a.minHpRatio;
 
       final b = fight(
         Campaign.levels[level],
@@ -60,11 +69,11 @@ void _singleLevelReport(int seeds) {
       '${'$bw/$bl/$bt'.padRight(13)}'
       '${(bturns / seeds).toStringAsFixed(1).padRight(5)}'
       '${'${(bHp / seeds).round()}/$maxHp'.padRight(11)}'
+      '${'${(bMinSum / seeds * 100).round()}%/${(bMinWorst * 100).round()}%'.padRight(17)}'
       '${'$bu/$bul'.padRight(11)}'
       '${(bTurns / seeds).toStringAsFixed(1).padRight(6)}'
       '${'${(bBerserkHp / seeds).round()}/$maxHp'.padRight(9)}'
-      '${(bAttacks / seeds).toStringAsFixed(1).padRight(9)}'
-      '${(bEnemyLeft / seeds).toStringAsFixed(0)}%',
+      '${(bAttacks / seeds).toStringAsFixed(1).padRight(9)}',
     );
   }
 }

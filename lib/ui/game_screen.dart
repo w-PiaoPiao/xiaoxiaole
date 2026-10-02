@@ -1306,6 +1306,13 @@ class _GameScreenState extends State<GameScreen>
             ny: 0.60,
             size: 16,
           );
+        case CombatEventKind.info:
+          // 机制提示走战场中央：目前有"治疗被削弱"与无尽模式的"僵持"。
+          // 它们没有数字、只有一句话，但对玩家的决策很重要——尤其"僵持"，
+          // 它解释了为什么接下来的预警数字会一直变大。
+          if (e.text != null) {
+            fx.addFloat(e.text!, Palette.danger, nx: 0.50, ny: 0.66, size: 20);
+          }
         default:
           break;
       }

@@ -224,12 +224,16 @@ class UpgradePool {
     Upgrade(
       id: 'rage',
       name: '蓄能',
-      desc: '黄宝石怒气 +4',
+      desc: '黄宝石怒气 +2',
       icon: UpgradeIcon.bolt,
       themeColor: 0xFFF0B01F,
       maxStacks: 5,
       weight: 8,
-      apply: (p) => p.copyWith(yellowRage: p.yellowRage + 4),
+      // +2 而不是 +4：怒气的基数是每颗 4 点，+4 等于单层就把必杀频率
+      // 翻一倍——池子里唯一一条单层收益 +100% 的牌，而且它抢的是「必杀
+      // 是攒出来的大招」这条节奏底线（见 PlayerProfile.yellowRage 的注释）。
+      // +2 与「铁壁」的 +6/13 同档（+50%/层），满层 3.5 倍。
+      apply: (p) => p.copyWith(yellowRage: p.yellowRage + 2),
     ),
     Upgrade(
       id: 'ultimate',

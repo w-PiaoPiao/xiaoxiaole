@@ -72,6 +72,16 @@ class EnemyDef {
   /// 每进入下一形态，攻击力提升的比例（0.15 = 每管 +15%）。
   final double phaseAttackGrowth;
 
+  /// 消耗战惩罚：同一波内从 [BattleState.attritionStartTurn] 个玩家回合起，
+  /// 每 [BattleState.attritionEveryTurns] 回合攻击力提升的比例。0 = 关闭。
+  ///
+  /// 它管的是"僵持"：输出跟不上的 build 不会被一刀砍死，但会被越来越重的
+  /// 每一击磨死。没有它，无尽模式的终局会退化成"玩家满血站着、敌人也不掉
+  /// 血"的无限平局（详见 [BattleState.incomingHitCapRatio] 与
+  /// [EndlessRoster.attritionRamp]）。战役不启用：短局的紧张感来自封顶，
+  /// 不需要一条时间轴。
+  final double attritionRamp;
+
   /// 章节配色（用于光效）。
   final int themeColor;
 
@@ -94,6 +104,7 @@ class EnemyDef {
     this.rageDrain = 0,
     this.phases = 1,
     this.phaseAttackGrowth = 0.15,
+    this.attritionRamp = 0,
   });
 
   bool get enrages => enrageAt > 0;
@@ -280,7 +291,7 @@ class Campaign {
         taunt: '「把你的怒火……留给我，好吗？」',
         archetype: EnemyArchetype.wisp,
         maxHp: 2600,
-        attack: 62,
+        attack: 76,
         turnsPerAttack: 3,
         rageDrain: 8,
         themeColor: 0xFF57E0C8,
@@ -297,7 +308,7 @@ class Campaign {
         taunt: '「此路不通。」',
         archetype: EnemyArchetype.guardian,
         maxHp: 3600,
-        attack: 118,
+        attack: 128,
         turnsPerAttack: 3,
         shieldRegen: 42,
         heavyEvery: 3,
@@ -315,7 +326,7 @@ class Campaign {
         taunt: '「你眨眼的功夫，就够了。」',
         archetype: EnemyArchetype.assassin,
         maxHp: 4400,
-        attack: 106,
+        attack: 104,
         turnsPerAttack: 2,
         heavyEvery: 3,
         heavyMultiplier: 2.0,
