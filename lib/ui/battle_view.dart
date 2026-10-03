@@ -192,6 +192,16 @@ class BattleView extends StatelessWidget {
                 padding: EdgeInsets.only(left: 4),
                 child: Tag(text: '禁疗', color: Color(0xFFE85A7A), dense: true),
               ),
+            if (battle.poisonTurns > 0)
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
+                child: Tag(text: '中毒', color: Color(0xFF7ACB6E), dense: true),
+              ),
+            if (battle.wardWeakenTurns > 0)
+              const Padding(
+                padding: EdgeInsets.only(left: 4),
+                child: Tag(text: '结界', color: Color(0xFFC8A2E0), dense: true),
+              ),
           ],
         ),
       ],
@@ -222,7 +232,11 @@ class BattleView extends StatelessWidget {
         const Spacer(),
         if (danger)
           Tag(
-            text: battle.nextAttackIsHeavy
+            // 专属技能回合的预警直接报技能名：玩家提前一回合看到"她要亮
+            // 什么本事"，就能决定是补盾、补血还是赶在落点前打断节奏。
+            text: battle.nextAttackIsSkill
+                ? '${battle.def.skill!.name} ${battle.incomingDamage}'
+                : battle.nextAttackIsHeavy
                 ? '重击 ${battle.incomingDamage}'
                 : '攻击 ${battle.incomingDamage}',
             color: Palette.danger,

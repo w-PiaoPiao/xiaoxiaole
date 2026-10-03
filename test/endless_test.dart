@@ -35,9 +35,9 @@ void main() {
       }
     });
 
-    test('原型按战役六战轮换登场', () {
+    test('角色按战役十三战轮换登场', () {
       final firstCycle = [
-        for (var wave = 1; wave <= 6; wave++)
+        for (var wave = 1; wave <= 13; wave++)
           EndlessRoster.enemyFor(wave).archetype,
       ];
       expect(
@@ -46,20 +46,19 @@ void main() {
       );
       // 第二个循环从头再来，但强度已经抬上去了。
       expect(
-        EndlessRoster.enemyFor(7).archetype,
+        EndlessRoster.enemyFor(14).archetype,
         EndlessRoster.enemyFor(1).archetype,
       );
       expect(
-        EndlessRoster.enemyFor(7).maxHp,
-        greaterThan(EndlessRoster.enemyFor(6).maxHp),
+        EndlessRoster.enemyFor(14).maxHp,
+        greaterThan(EndlessRoster.enemyFor(13).maxHp),
       );
     });
 
     test('阶位前缀随波次出现', () {
-      expect(EndlessRoster.enemyFor(1).name, '迷雾鬼火');
-      expect(EndlessRoster.enemyFor(6).name, '终焉之影');
-      expect(EndlessRoster.enemyFor(7).name, startsWith('重铸·'));
+      expect(EndlessRoster.enemyFor(1).name, '茉黎');
       expect(EndlessRoster.enemyFor(13).name, startsWith('灾变·'));
+      expect(EndlessRoster.enemyFor(14).name, startsWith('灾变·'));
       expect(EndlessRoster.enemyFor(19).name, startsWith('终焉·'));
     });
 
@@ -101,9 +100,10 @@ void main() {
 
     test('强度最终会压过玩家，且肉鸽层让玩家走得更远', () {
       // 12 个种子的中位通过波数，按 tool/balance_report.dart 的 24 种子数据
-      // 校准。含机关口径、多形态（第 9 波起 3 管、第 16 波起 4 管）、
+      // 校准。含机关口径、多形态（第 10 波起 3 管、第 17 波起 4 管）、
       // yellowRage=4 的稀有必杀，以及 [EndlessRoster.attritionRamp] 的
-      // 消耗战惩罚：output 流中位 17、survival 流中位 23，观测 8~47 波。
+      // 消耗战惩罚。十三位角色轮换后机制总量更大，最佳局比旧六人时代
+      // 跑得更深（观测上界约 60 波）。
       //
       // 种子之间的方差很大，所以这里守的是**数量级失衡**：中位掉到 10 以下
       // 说明肉鸽层在拖后腿，涨到 36 以上说明敌人成长压不住了。
@@ -114,8 +114,8 @@ void main() {
       for (final wave in fallen) {
         expect(
           wave,
-          lessThanOrEqualTo(60),
-          reason: '有人打穿了 60 波，敌人成长太慢（当前观测上界约 47 波）',
+          lessThanOrEqualTo(70),
+          reason: '有人打穿了 70 波，敌人成长太慢（当前观测上界约 60 波）',
         );
         expect(wave, greaterThan(3), reason: '但也不该死得太快');
       }

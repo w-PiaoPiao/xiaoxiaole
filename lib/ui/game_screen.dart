@@ -1202,6 +1202,30 @@ class _GameScreenState extends State<GameScreen>
       fx.addFloat('狂暴', Palette.danger, nx: 0.50, ny: 0.30, size: 30);
       fx.shakeBy(14);
     }
+    // 专属技能起手：舞台中央报出技能名，与预警行的预告对上。
+    for (final e in events) {
+      if (e.kind != CombatEventKind.enemySkill) continue;
+      fx.addFloat(
+        e.text ?? '技能',
+        Color(battle.def.themeColor),
+        nx: 0.50,
+        ny: 0.30,
+        size: 26,
+      );
+      fx.shakeBy(8);
+    }
+    final enemyHeal = events
+        .where((e) => e.kind == CombatEventKind.enemyHeal)
+        .fold(0, (sum, e) => sum + e.amount);
+    if (enemyHeal > 0) {
+      fx.addFloat(
+        '回复 +$enemyHeal',
+        const Color(0xFF7ACB6E),
+        nx: 0.68,
+        ny: 0.44,
+        size: 18,
+      );
+    }
     if (events.any((e) => e.kind == CombatEventKind.ultimate)) {
       fx.addFloat('斩月', Palette.gold, nx: 0.50, ny: 0.33, size: 40);
     }
@@ -1280,6 +1304,22 @@ class _GameScreenState extends State<GameScreen>
             const Color(0xFF57E0C8),
             nx: _laneRight,
             ny: 0.74,
+            size: 17,
+          );
+        case CombatEventKind.poisonTick:
+          fx.addFloat(
+            '咒毒 -${e.amount}',
+            const Color(0xFF7ACB6E),
+            nx: _laneLeft,
+            ny: 0.74,
+            size: 18,
+          );
+        case CombatEventKind.charm:
+          fx.addFloat(
+            '护盾被夺 -${e.amount}',
+            const Color(0xFFFF4D6D),
+            nx: _laneLeft,
+            ny: 0.95,
             size: 17,
           );
         case CombatEventKind.enemyAttack:
@@ -1704,8 +1744,22 @@ class _GameScreenState extends State<GameScreen>
                     ),
                     const SizedBox(height: 12),
                     Text(
+                      level.enemy.story,
+                      style: AppText.label.copyWith(
+                        fontSize: 12,
+                        height: 1.65,
+                        color: Palette.textPrimary.withValues(alpha: 0.9),
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
                       level.enemy.taunt,
-                      style: AppText.label.copyWith(fontSize: 13, height: 1.6),
+                      style: AppText.label.copyWith(
+                        fontSize: 13,
+                        height: 1.6,
+                        color: Color(level.enemy.themeColor),
+                      ),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 22),

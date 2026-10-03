@@ -238,8 +238,10 @@ void main() {
     });
 
     test('吸血型敌人造成伤害后回复自身', () {
-      final drainDef = Campaign.levels[5].enemy;
-      final state = BattleState(def: drainDef, levelIndex: 5);
+      // 卡梅拉（第九战）的「血宴」是吸血机制的正面教学。
+      final drainDef = Campaign.levels[8].enemy;
+      expect(drainDef.drainRatio, greaterThan(0), reason: '这一关必须带吸血，否则用例失去意义');
+      final state = BattleState(def: drainDef, levelIndex: 8);
       state.enemyHp = drainDef.maxHp ~/ 2;
       final before = state.enemyHp;
       state.applyClear({GemType.red: 4}, combo: 1);
@@ -249,7 +251,7 @@ void main() {
     });
 
     test('吸血不会把被击杀的敌人救活', () {
-      final drainDef = Campaign.levels[5].enemy;
+      final drainDef = Campaign.levels[8].enemy;
       final state = BattleState(def: drainDef, levelIndex: 5);
       // 终战是多形态 BOSS：这一条守的是"最后一管被打空"，
       // 所以直接站到最后一管上，避免打着打着变成换形态。
@@ -332,9 +334,22 @@ void main() {
     });
 
     test('汲魂：命中时夺走怒气，但不会夺走玩家没有的', () {
-      // 第一关的鬼火就带汲魂，是玩家见到的第一个敌方机制。
-      final wispDef = Campaign.levels[0].enemy;
-      expect(wispDef.rageDrain, greaterThan(0), reason: '这一关必须带汲魂，否则用例失去意义');
+      // 汲魂在战役里不再是某位角色的基础机制（凛月的「月蚀」走技能通道，
+      // 无尽模式里它以精英词条登场）——这里构造一个带汲魂的敌人，
+      // 守住结算口径本身。
+      const wispDef = EnemyDef(
+        id: 'test_siphon',
+        name: '试炼汲魂者',
+        title: '无',
+        story: '测试用的汲魂剪影。',
+        taunt: '「怒气也不错。」',
+        archetype: EnemyArchetype.moonPriestess,
+        maxHp: 1000,
+        attack: 50,
+        turnsPerAttack: 3,
+        rageDrain: 8,
+        themeColor: 0xFF9FD8FF,
+      );
 
       final rich = BattleState(def: wispDef, levelIndex: 0)..rage = 30;
       for (var i = 0; i < wispDef.turnsPerAttack; i++) {
@@ -477,8 +492,9 @@ void main() {
       id: 'test_boss',
       name: '试炼之影',
       title: '两管血',
+      story: '测试用的两管血剪影。',
       taunt: '「再来一次。」',
-      archetype: EnemyArchetype.warlord,
+      archetype: EnemyArchetype.voidWatcher,
       maxHp: 1000,
       phases: 2,
       attack: 100,
@@ -556,6 +572,232 @@ void main() {
       state.enemyHp = 10;
       state.applyClear({GemType.red: 3}, combo: 1);
       expect(state.enraged, isFalse, reason: '满血的下一管上"残血狂暴"不成立');
+    });
+  });
+
+  group('专属技能', () {
+    /// 构造一位带技能的测试角色。turnsPerAttack=1：每个玩家回合结束她就
+    /// 出手一次，skillEvery 控制技能节奏，用例不必拖很多回合。
+    EnemyDef skillBoss(
+      EnemySkill skill, {
+      int skillEvery = 2,
+      int attack = 100,
+      int phases = 1,
+    }) => EnemyDef(
+      id: 'test_skill',
+      name: '试炼技能者',
+      title: '无',
+      story: '测试用的技能剪影。',
+      taunt: '「看招。」',
+      archetype: EnemyArchetype.moonPriestess,
+      maxHp: 1000,
+      attack: attack,
+      turnsPerAttack: 1,
+      skill: skill,
+      skillEvery: skillEvery,
+      phases: phases,
+      themeColor: 0xFF9FD8FF,
+    );
+
+    /// 出厂 300 血撑不过她的三下 100 攻击——多回合的技能用例在每一步前
+    /// 把玩家血补满，读数只关心技能本身，不关心玩家的死活。
+    void revivePlayer(BattleState state) => state.playerHp = state.profile.maxHp;
+
+    test('技能回合有预警，且预警包含影分身的追加段', () {
+      final def = skillBoss(
+        const EnemySkill(name: '影分身', kind: EnemySkillKind.shadowStrike, ratio: 0.5),
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      // 第 1 次出手（attackCount=0 → 下一次是 1）不是技能回合。
+      expect(state.nextAttackIsSkill, isFalse);
+      expect(state.incomingDamage, 100);
+
+      // 第 2 次出手是技能回合：预警 = 本体 100 + 分身 50。
+      state.endPlayerTurn();
+      expect(state.nextAttackIsSkill, isTrue);
+      expect(state.incomingDamage, 150);
+    });
+
+    test('自愈技能回血但不超过上限', () {
+      final def = skillBoss(
+        const EnemySkill(name: '萌芽复苏', kind: EnemySkillKind.sprout, ratio: 0.07),
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      state.enemyHp = def.maxHp - 200;
+      revivePlayer(state);
+      state.endPlayerTurn(); // 第 1 次出手：普通攻击（敌人血量不变）
+      expect(state.enemyHp, def.maxHp - 200);
+      revivePlayer(state);
+      state.endPlayerTurn(); // 第 2 次出手：技能回合，回复 70
+      expect(state.enemyHp, def.maxHp - 130);
+      // 打到残血再触发也不超过上限。
+      state.enemyHp = def.maxHp - 10;
+      revivePlayer(state);
+      state.endPlayerTurn();
+      revivePlayer(state);
+      state.endPlayerTurn();
+      expect(state.enemyHp, def.maxHp);
+    });
+
+    test('结盾技能给敌方护盾，受每管血量三分之一封顶', () {
+      final def = skillBoss(
+        const EnemySkill(name: '圣光壁垒', kind: EnemySkillKind.barrier, ratio: 0.12),
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      revivePlayer(state);
+      state.endPlayerTurn();
+      revivePlayer(state);
+      state.endPlayerTurn();
+      expect(state.enemyShield, 120);
+      revivePlayer(state);
+      state.endPlayerTurn();
+      revivePlayer(state);
+      state.endPlayerTurn();
+      expect(state.enemyShield, 240);
+    });
+
+    test('咒毒按回合结算，毒可以致死', () {
+      // 攻击力为 0 的试炼者：掉血只来自毒，读数干净。
+      final def = skillBoss(
+        const EnemySkill(name: '猩红咒毒', kind: EnemySkillKind.hex, amount: 30, turns: 3),
+        attack: 0,
+        skillEvery: 99,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      state.poisonDamage = 30;
+      state.poisonTurns = 2;
+      state.endPlayerTurn();
+      expect(state.playerHp, state.profile.maxHp - 30);
+      expect(state.poisonTurns, 1);
+      state.endPlayerTurn();
+      expect(state.playerHp, state.profile.maxHp - 60);
+      expect(state.poisonTurns, 0);
+      state.endPlayerTurn();
+      expect(state.playerHp, state.profile.maxHp - 60, reason: '毒结束后不再掉血');
+
+      // 致死口径：毒的最后一跳能收走残血的玩家。
+      final dying = BattleState(def: def, levelIndex: 0, playerHp: 25);
+      dying.poisonDamage = 30;
+      dying.poisonTurns = 2;
+      dying.endPlayerTurn();
+      expect(dying.phase, BattlePhase.lost, reason: '咒毒可以致死');
+    });
+
+    test('魅惑夺走玩家的护盾并化为己用', () {
+      final def = skillBoss(
+        const EnemySkill(name: '魅惑凝视', kind: EnemySkillKind.charm, ratio: 0.45),
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      state.shield = 300;
+      revivePlayer(state);
+      state.endPlayerTurn(); // 普通攻击被盾挡下：300 → 200
+      expect(state.shield, 200);
+      revivePlayer(state);
+      state.endPlayerTurn(); // 技能回合：攻击再吃 100，再被夺走 100×0.45=45
+      expect(state.shield, 55);
+      expect(state.enemyShield, 45, reason: '被夺的护盾化为她的护盾');
+    });
+
+    test('月蚀偷走怒气', () {
+      final def = skillBoss(
+        const EnemySkill(name: '月蚀', kind: EnemySkillKind.eclipse, amount: 16),
+      );
+      final state = BattleState(def: def, levelIndex: 0)..rage = 50;
+      revivePlayer(state);
+      state.endPlayerTurn();
+      expect(state.rage, 50, reason: '第 1 次出手不是技能回合');
+      revivePlayer(state);
+      state.endPlayerTurn();
+      expect(state.rage, 34);
+    });
+
+    test('缠缚让护盾获取减半并逐回合衰减', () {
+      // 攻击力为 0：她的攻击不会把护盾打掉，读数只反映结界本身；
+      // skillEvery=3 让技能只在第 3 次出手触发，不会中途再缠一遍。
+      final def = skillBoss(
+        const EnemySkill(name: '丝线缠缚', kind: EnemySkillKind.snare, turns: 2),
+        attack: 0,
+        skillEvery: 3,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      revivePlayer(state);
+      state.endPlayerTurn();
+      revivePlayer(state);
+      state.endPlayerTurn();
+      revivePlayer(state);
+      state.endPlayerTurn(); // 第 3 次出手：挂上 2 回合结界
+      expect(state.wardWeakenTurns, 2);
+      state.applyClear({GemType.blue: 2}, combo: 1);
+      expect(state.shield, Campaign.player.blueShield, reason: '获取减半');
+
+      revivePlayer(state);
+      state.endPlayerTurn(); // 结界衰减到 1：仍然减半
+      state.applyClear({GemType.blue: 2}, combo: 1);
+      expect(
+        state.shield,
+        Campaign.player.blueShield * 2,
+        reason: '结界还有 1 回合，半价继续生效',
+      );
+
+      revivePlayer(state);
+      state.endPlayerTurn(); // 结界结束
+      expect(state.wardWeakenTurns, 0);
+      state.applyClear({GemType.blue: 2}, combo: 1);
+      expect(state.shield, Campaign.player.blueShield * 4, reason: '恢复全价');
+    });
+
+    test('过载叠层提高攻击，换形态后清零', () {
+      final def = skillBoss(
+        const EnemySkill(name: '过载充能', kind: EnemySkillKind.surge, ratio: 0.09),
+        phases: 2,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      revivePlayer(state);
+      state.endPlayerTurn();
+      expect(state.enemyPowerStacks, 0);
+      revivePlayer(state);
+      state.endPlayerTurn();
+      expect(state.enemyPowerStacks, 1);
+      // 每层 +9%：两层的预警按 100×1.18 判定。
+      revivePlayer(state);
+      state.endPlayerTurn();
+      revivePlayer(state);
+      state.endPlayerTurn();
+      expect(state.enemyPowerStacks, 2);
+      expect(state.incomingDamage, (100 * 1.18).round());
+
+      // 换形态把叠层清零：与易伤/护盾同一条口径。
+      state.enemyHp = 10;
+      state.applyClear({GemType.red: 30}, combo: 1);
+      expect(state.phaseIndex, 2, reason: '打空一管进入下一形态');
+      expect(state.enemyPowerStacks, 0);
+    });
+
+    test('龙威贯穿无视护盾', () {
+      final def = skillBoss(
+        const EnemySkill(name: '龙威重压', kind: EnemySkillKind.crush),
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      state.shield = 500;
+      revivePlayer(state);
+      state.endPlayerTurn(); // 普通攻击被盾挡下
+      expect(state.shield, 400);
+      revivePlayer(state);
+      state.endPlayerTurn(); // 技能回合：直接贯穿
+      expect(state.shield, 400, reason: '护盾分毫未损');
+      expect(state.playerHp, state.profile.maxHp - 100, reason: '这一击实打实落在血上');
+    });
+
+    test('十三位角色的技能定义各就各位', () {
+      final skills = [
+        for (final level in Campaign.levels)
+          if (level.enemy.skill case final skill?) skill.kind,
+      ];
+      expect(skills.length, 13, reason: '每位美少女都有一个专属技能');
+      expect(skills.toSet().length, lessThan(13), reason: '允许复用机制，但下面的去重口径要心里有数');
+      // 终战与龙女必须带硬机制：贯穿与咒毒是她们人设的战斗面。
+      expect(Campaign.levels[11].enemy.skill!.kind, EnemySkillKind.crush);
+      expect(Campaign.levels[12].enemy.skill!.kind, EnemySkillKind.hex);
     });
   });
 }

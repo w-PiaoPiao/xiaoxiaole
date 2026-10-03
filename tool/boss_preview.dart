@@ -1,4 +1,4 @@
-// BOSS 造型预览：把六个原型剪影渲染到一张 PNG 上，逐一核对造型差异。
+// BOSS 造型预览：把十三位美少女的立绘渲染到一张 PNG 上，逐一核对造型差异。
 //
 // 用法：flutter test tool/boss_preview.dart
 // 产物：build/boss_preview/bosses.png
@@ -18,26 +18,13 @@ void main() {
     await loadPreviewFont();
   });
 
-  testWidgets('六个原型的造型一览', (tester) async {
+  testWidgets('十三位美少女的造型一览', (tester) async {
     tester.view.devicePixelRatio = 2.0;
     tester.view.physicalSize = const Size(411 * 2, 914 * 2);
 
-    const names = {
-      EnemyArchetype.wisp: '迷雾鬼火',
-      EnemyArchetype.guardian: '石甲守卫',
-      EnemyArchetype.assassin: '影刃刺客',
-      EnemyArchetype.witch: '血月巫女',
-      EnemyArchetype.enchantress: '深渊魔女',
-      EnemyArchetype.warlord: '终焉之影',
-    };
-    const colors = {
-      EnemyArchetype.wisp: Color(0xFF57E0C8),
-      EnemyArchetype.guardian: Color(0xFFE0A94A),
-      EnemyArchetype.assassin: Color(0xFF9B7BE8),
-      EnemyArchetype.witch: Color(0xFFE85A7A),
-      EnemyArchetype.enchantress: Color(0xFFFF4D6D),
-      EnemyArchetype.warlord: Color(0xFFB44BFF),
-    };
+    final maidens = [
+      for (final level in Campaign.levels) level.enemy,
+    ];
 
     final key = GlobalKey();
     await tester.pumpWidget(
@@ -50,7 +37,7 @@ void main() {
             backgroundColor: const Color(0xFF0E0818),
             body: Column(
               children: [
-                for (final archetype in EnemyArchetype.values)
+                for (final def in maidens)
                   Expanded(
                     child: Row(
                       children: [
@@ -58,11 +45,14 @@ void main() {
                         // 是零尺寸（EnemyArt 会安全跳过），截图里就是空的。
                         CustomPaint(
                           size: const Size(130, 150),
-                          painter: _BossPainter(archetype, colors[archetype]!),
+                          painter: _BossPainter(
+                            def.archetype,
+                            Color(def.themeColor),
+                          ),
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          names[archetype]!,
+                          def.name,
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,

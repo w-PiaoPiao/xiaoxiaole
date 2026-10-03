@@ -64,6 +64,19 @@ enum CombatEventKind {
   /// 敌人打空一管血、进入下一形态（多管血 BOSS）。
   phaseChange,
 
+  /// 敌人的专属技能起手（[CombatEvent.text] 是技能名）。
+  /// 具体效果会跟随各自的事件（回复、护盾、中毒……）。
+  enemySkill,
+
+  /// 敌人自愈。
+  enemyHeal,
+
+  /// 玩家中毒的每回合掉血。
+  poisonTick,
+
+  /// 玩家的护盾被夺走（魅惑）。
+  charm,
+
   /// 提示文本。
   info,
 }
@@ -96,6 +109,16 @@ class BattleState {
 
   /// 剩余的治疗削弱回合数。
   int healBlockTurns = 0;
+
+  /// 玩家中毒：剩余回合数与每回合损失的生命（「咒毒」）。
+  int poisonTurns = 0;
+  int poisonDamage = 0;
+
+  /// 玩家的护盾获取减半的剩余回合数（「丝线缠缚」）。
+  int wardWeakenTurns = 0;
+
+  /// 敌人「过载充能」的叠层数（每层 +[EnemySkill.ratio] 攻击，封顶 5 层）。
+  int enemyPowerStacks = 0;
 
   int enemyHp;
   int enemyShield = 0;
@@ -194,19 +217,38 @@ class BattleState {
   bool get nextAttackIsHeavy =>
       def.heavyEvery > 0 && (attackCount + 1) % def.heavyEvery == 0;
 
+  /// 第 [n] 次（从 1 数）敌方行动是否触发专属技能。
+  ///
+  /// 与重击共用同一套计数（[EnemyDef.attackCount] 口径），两者可能在同一
+  /// 次行动里相遇——主段按重击算，技能效果照常执行。
+  bool _isSkillAttack(int n) =>
+      def.skill != null && def.skillEvery > 0 && n % def.skillEvery == 0;
+
+  /// 敌人的下一次行动是否触发专属技能（预警用）。
+  bool get nextAttackIsSkill => _isSkillAttack(attackCount + 1);
+
   /// 敌人下次出手的预计伤害（用于 UI 预警与落子顾问的生死判断）。
   ///
-  /// 与 [_enemyAct] 共用 [_predictAttackDamage]：减伤与单次伤害封顶都要
-  /// 算进来，否则预警是个永远偏大的数字，玩家按它决定补血还是补盾就会
-  /// 误判（重击在封顶下能差出上百点）。
-  int get incomingDamage => _predictAttackDamage(nextAttackIsHeavy);
+  /// 与 [_enemyAct] 共用预测：减伤、单次伤害封顶与技能的追加段都要算进来，
+  /// 否则预警是个永远偏小的数字——影分身回合按它决定补血就会误判。
+  int get incomingDamage {
+    var total = _predictAttackDamage(
+      def.attack.toDouble(),
+      isHeavy: nextAttackIsHeavy,
+    );
+    final skill = def.skill;
+    if (nextAttackIsSkill && skill?.kind == EnemySkillKind.shadowStrike) {
+      total += _predictAttackDamage(def.attack * skill!.ratio, isHeavy: false);
+    }
+    return total;
+  }
 
-  /// 本次攻击的预测伤害，[isHeavy] 决定是否按重击计算。
+  /// 本次攻击的预测伤害。[base] 是攻击力（重击在外层乘好倍率）。
   ///
   /// 顺序是刻意的：「硬化」减伤在封顶**之前**结算——上限保护的是玩家能
   /// 承受的最大一击，不该被减伤绕过。
-  int _predictAttackDamage(bool isHeavy) {
-    var raw = def.attack * (isHeavy ? def.heavyMultiplier : 1.0);
+  int _predictAttackDamage(double base, {required bool isHeavy}) {
+    var raw = base * (isHeavy ? def.heavyMultiplier : 1.0);
     // 形态递增：每打空一管血，敌人的下一次出手就更凶一档。预警算的是
     // 「下一次」的伤害，所以这里的形态系数必须和 [_enemyAct] 用的是同一个。
     if (phaseIndex > 1) {
@@ -215,6 +257,10 @@ class BattleState {
     if (enraged) raw *= 1.5;
     // 毒藤：缠在棋盘上的藤蔓每一株都在给敌人加码，清掉才停。
     if (vineCount > 0) raw *= 1 + vineCount * vineAttackBonus;
+    // 「过载充能」：永久叠层。
+    if (enemyPowerStacks > 0) {
+      raw *= 1 + (def.skill?.ratio ?? 0) * enemyPowerStacks;
+    }
     if (profile.damageReduction > 0) raw *= 1 - profile.damageReduction;
     final capRatio = fx.hitCapRatio > 0 ? fx.hitCapRatio : singleHitCapRatio;
     final cap = (profile.maxHp * capRatio).round();
@@ -386,7 +432,11 @@ class BattleState {
   /// 免得某条新路径绕过代价。
   void _gainShield(int amount, List<CombatEvent> events) {
     // 「苦修」的代价在这一层统一执行：蓝宝石、暴击转盾、溢流转盾都绕不过去。
-    final scaled = (amount * fx.shieldGainMul).round();
+    // 「丝线缠缚」的结界同样在这里收口：减半对一切护盾来源生效。
+    var scaled = (amount * fx.shieldGainMul).round();
+    if (wardWeakenTurns > 0) {
+      scaled = (scaled * 0.5).round();
+    }
     if (scaled <= 0) return;
     final before = shield;
     shield = min(profile.maxShield, shield + scaled);
@@ -474,6 +524,9 @@ class BattleState {
     curseTurns = 0;
     // 新形态的狂暴要重新判定：残血狂暴在满血的下一管上不成立。
     enraged = false;
+    // 「过载充能」的叠层同样清零：每一管都是一次重新开局，双方都要
+    // 把优势从零建立——这与易伤、护盾清零是同一条口径。
+    enemyPowerStacks = 0;
     turnsToAttack = def.turnsPerAttack;
     events.add(
       CombatEvent(
@@ -565,6 +618,23 @@ class BattleState {
       }
     }
 
+    // 「咒毒」：魔女们的礼物按回合腐烂玩家的血。排在回春之后——先回再掉，
+    // 两边都能在同一回合读出完整的数字；它可以致死，中毒的黄昏不是安全的。
+    if (poisonTurns > 0 && playerHp > 0) {
+      poisonTurns--;
+      playerHp = max(0, playerHp - poisonDamage);
+      events.add(CombatEvent(CombatEventKind.poisonTick, poisonDamage));
+      log.insert(0, '咒毒夺走了 $poisonDamage 点生命');
+      if (playerHp <= 0) {
+        phase = BattlePhase.lost;
+        log.insert(0, '你倒下了……');
+        return events;
+      }
+    }
+
+    // 「丝线缠缚」的结界每回合自行衰减。
+    if (wardWeakenTurns > 0) wardWeakenTurns--;
+
     // 「血契」：力量是拿自己的血换的，每回合先收利息再轮到敌人。
     // 这一下可以致死——那是选择它时就已经写好的代价。
     if (fx.selfDamagePerTurn > 0 && playerHp > 0) {
@@ -616,11 +686,22 @@ class BattleState {
     attackCount++;
 
     final isHeavy = def.heavyEvery > 0 && attackCount % def.heavyEvery == 0;
-    // 与 UI 预警走同一个函数：屏幕上写着多少，落下来就是多少。
-    final total = _predictAttackDamage(isHeavy);
+    final isSkill = _isSkillAttack(attackCount);
+    final skill = isSkill ? def.skill : null;
+    if (skill != null) {
+      // 技能起手先给一条明确的提示：玩家的预警行此时也写着这个名字，
+      // 演出和预告对得上，才像"她亮出了本事"而不是"莫名其妙挨了一下"。
+      events.add(CombatEvent(CombatEventKind.enemySkill, 0, skill.name));
+      log.insert(0, '${def.name} 发动专属技能 · ${skill.name}');
+    }
 
+    // 与 UI 预警走同一个函数：屏幕上写着多少，落下来就是多少。
+    final total = _predictAttackDamage(def.attack.toDouble(), isHeavy: isHeavy);
+
+    // 「龙威重压」：这一爪无视护盾——护盾留在场上，血直接掉。
+    final pierce = skill?.kind == EnemySkillKind.crush;
     var absorbed = 0;
-    if (shield > 0) {
+    if (!pierce && shield > 0) {
       absorbed = min(shield, total);
       shield -= absorbed;
     }
@@ -628,10 +709,99 @@ class BattleState {
     playerHp = max(0, playerHp - loss);
     // 即使被护盾完全挡下也要产生事件，UI 需要播放挨打反馈。
     events.add(
-      CombatEvent(CombatEventKind.enemyAttack, total, isHeavy ? '重击' : null),
+      CombatEvent(
+        CombatEventKind.enemyAttack,
+        total,
+        pierce ? '贯穿' : (isHeavy ? '重击' : null),
+      ),
     );
     if (absorbed > 0) {
       events.add(CombatEvent(CombatEventKind.playerShield, absorbed));
+    }
+
+    // 「影分身」：追加一段独立结算的伤害——同样吃封顶与减伤，
+    // 也同样可以被护盾挡下（护盾没被主段打穿的话）。
+    if (skill?.kind == EnemySkillKind.shadowStrike) {
+      final extra = _predictAttackDamage(
+        def.attack * skill!.ratio,
+        isHeavy: false,
+      );
+      var extraAbsorbed = 0;
+      if (shield > 0) {
+        extraAbsorbed = min(shield, extra);
+        shield -= extraAbsorbed;
+      }
+      playerHp = max(0, playerHp - (extra - extraAbsorbed));
+      events.add(
+        CombatEvent(CombatEventKind.enemyAttack, extra, skill.name),
+      );
+      if (extraAbsorbed > 0) {
+        events.add(CombatEvent(CombatEventKind.playerShield, extraAbsorbed));
+      }
+    }
+
+    // 专属技能的效果段。除龙威与分身外，其余技能与攻击互不干涉——
+    // 它们改变的是战场的"规则"（血、盾、怒、毒），不是这一击的大小。
+    switch (skill?.kind) {
+      case EnemySkillKind.sprout:
+        final heal = (def.maxHp * skill!.ratio).round();
+        if (heal > 0) {
+          final before = enemyHp;
+          enemyHp = min(def.maxHp, enemyHp + heal);
+          final actual = enemyHp - before;
+          if (actual > 0) {
+            events.add(CombatEvent(CombatEventKind.enemyHeal, actual));
+            log.insert(0, '${def.name} 回复了 $actual 点生命');
+          }
+        }
+      case EnemySkillKind.barrier:
+        final barrier = (def.maxHp * skill!.ratio).round();
+        if (barrier > 0) {
+          final before = enemyShield;
+          enemyShield = min(def.maxHp ~/ 3, enemyShield + barrier);
+          final actual = enemyShield - before;
+          if (actual > 0) {
+            events.add(CombatEvent(CombatEventKind.enemyGuard, actual));
+          }
+        }
+      case EnemySkillKind.hex:
+        // 同毒叠加按刷新处理：新的毒性覆盖旧的，回合重置。
+        poisonDamage = skill!.amount;
+        poisonTurns = skill.turns;
+        events.add(const CombatEvent(CombatEventKind.info, 0, '咒毒缠身'));
+        log.insert(0, '你中毒了：每回合损失 $poisonDamage 点生命');
+      case EnemySkillKind.charm:
+        if (shield > 0) {
+          final stolen = min(shield, (shield * skill!.ratio).round());
+          shield -= stolen;
+          enemyShield = min(def.maxHp ~/ 3, enemyShield + stolen);
+          if (stolen > 0) {
+            events.add(CombatEvent(CombatEventKind.charm, stolen));
+            log.insert(0, '${def.name} 夺走了 $stolen 点护盾');
+          }
+        }
+      case EnemySkillKind.eclipse:
+        if (rage > 0) {
+          final stolen = min(rage, skill!.amount);
+          rage -= stolen;
+          events.add(CombatEvent(CombatEventKind.rageDrain, stolen));
+          log.insert(0, '${def.name} 夺走了 $stolen 点怒气');
+        }
+      case EnemySkillKind.snare:
+        wardWeakenTurns = skill!.turns;
+        events.add(const CombatEvent(CombatEventKind.info, 0, '结界:护盾获取减半'));
+        log.insert(0, '丝线缠上了你的手腕：护盾获取减半');
+      case EnemySkillKind.surge:
+        if (enemyPowerStacks < 5) {
+          enemyPowerStacks++;
+          final pct = (skill!.ratio * 100).round();
+          events.add(
+            CombatEvent(CombatEventKind.info, 0, '过载:攻击+$pct%'),
+          );
+          log.insert(0, '${def.name} 过载：攻击力提升 $pct%');
+        }
+      default:
+        break;
     }
 
     // 「荆棘壁垒」：被护盾扛下来的伤害，有一部分会扎回敌人身上。

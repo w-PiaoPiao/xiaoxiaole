@@ -47,11 +47,13 @@ class EnemyPose {
   }
 }
 
-/// 用矢量图形直接画出敌方角色。六个原型各有一套剪影：
-/// 鬼火是火焰幽灵、守卫是石甲巨人、刺客是兜帽双刀客、巫女与魔女是
-/// 悬浮魔女（后者多一对深渊触须）、终焉是弯角斗篷魔王。
-/// 统一思路是「深色剪影 + 主题色轮廓光」：靠渐变填充与定向轮廓光做出
-/// 体积感，不依赖任何位图资源。
+/// 用矢量图形直接画出十三位美少女。
+///
+/// 统一思路沿用旧的「深色剪影 + 主题色轮廓光」：一份共享的美少女身形
+/// （发、脸、躯干、双臂、裙摆），每位角色通过配色、发型与一套专属的
+/// 特色图层（翅膀、盾、刀、魔女帽、月环、鱼鳍、冰晶、披风、镜片、
+/// 齿轮、龙角龙尾、星环）区分——剪影的骨相是同一个人，气质全靠
+/// 「发色 + 头饰 + 标志物」表达，不依赖任何位图资源。
 /// 剪影缓存的键：量化时间 + 尺寸 + 配色 + 阶段 + 原型。
 @immutable
 class _SilhouetteKey {
@@ -94,10 +96,42 @@ class _SilhouetteKey {
   int get hashCode => Object.hash(t, w, h, theme, phase, enraged, archetype);
 }
 
+/// 发型：身后的发束形状。前发（刘海）全员共用。
+enum _HairStyle {
+  /// 长直/长卷：垂到裙摆的长发。
+  long,
+
+  /// 短发：发梢收在肩胛附近。
+  short,
+
+  /// 双马尾：后发收短，两条侧马尾另画。
+  twin,
+
+  /// 侧马尾：后发收短，一条高马尾垂在单侧。
+  sideTail,
+}
+
+/// 一位角色的配色与发型。剪影是深色的，但"深"里也要有各自的倾向——
+/// 发色是少女辨识度最高的部分，全员显式指定。
+class _MaidenColors {
+  final Color hairTop;
+  final Color hairBottom;
+  final Color dressTop;
+  final Color dressBottom;
+  final _HairStyle hair;
+
+  const _MaidenColors(
+    this.hairTop,
+    this.hairBottom,
+    this.dressTop,
+    this.dressBottom, [
+    this.hair = _HairStyle.long,
+  ]);
+}
+
 class EnemyArt {
   const EnemyArt._();
 
-  static const double _hornTip = 0.062;
   static const double _headTop = 0.125;
   static const double _eyeY = 0.205;
   static const double _shoulderY = 0.325;
@@ -111,7 +145,7 @@ class EnemyArt {
     Size size,
     Color theme,
     EnemyPose pose, {
-    EnemyArchetype archetype = EnemyArchetype.enchantress,
+    EnemyArchetype archetype = EnemyArchetype.voidWatcher,
   }) {
     // 首帧布局完成前 CustomPaint 可能以零尺寸触发一次 paint，此时任何
     // 渐变都会拿到 NaN 偏移。直接跳过，等真实尺寸的那一帧再画。
@@ -149,7 +183,7 @@ class EnemyArt {
     // 消散（战败）：整幅剪影一起淡出。
     //
     // 这里用一次 saveLayer 统一处理，而不是让内部每一笔各自乘系数——剪影有
-    // 二十来层填充（本体、发丝、面部、胸口宝石、裂纹……），漏掉任何一层都会
+    // 二十来层填充（本体、发丝、面部、配饰、裂纹……），漏掉任何一层都会
     // 留下"光环没了、人还完好站着"的残留。消散每局最多播一次、且此时战斗
     // 已经结束，这一层离屏缓冲的代价是划算的。
     final dissolving = pose.dissolve > 0.01;
@@ -166,7 +200,7 @@ class EnemyArt {
     if (canCache) {
       canvas.drawPicture(_silhouette(w, h, t, theme, pose, archetype));
     } else {
-      _paintSilhouette(canvas, w, h, t, theme, pose, archetype);
+      _paintMaiden(canvas, w, h, t, theme, pose, archetype);
     }
 
     if (dissolving) canvas.restore();
@@ -207,14 +241,744 @@ class EnemyArt {
     _cachedSilhouette?.dispose();
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    _paintSilhouette(canvas, w, h, _quantize(t), theme, pose, archetype);
+    _paintMaiden(canvas, w, h, _quantize(t), theme, pose, archetype);
     _cachedSilhouette = recorder.endRecording();
     _cachedKey = key;
     return _cachedSilhouette!;
   }
 
-  /// 按原型分发到各自的剪影绘制。
-  static void _paintSilhouette(
+  // ============================================================ 美少女框架
+
+  static _MaidenColors _colorsFor(EnemyArchetype archetype) {
+    switch (archetype) {
+      case EnemyArchetype.fairy:
+        return const _MaidenColors(
+          Color(0xFF2E8C7A),
+          Color(0xFF0E3A32),
+          Color(0xFF3E6E4C),
+          Color(0xFF12241A),
+          _HairStyle.short,
+        );
+      case EnemyArchetype.saint:
+        return const _MaidenColors(
+          Color(0xFFE8C878),
+          Color(0xFF8A6A2E),
+          Color(0xFFEFE4C8),
+          Color(0xFF9A8A5C),
+        );
+      case EnemyArchetype.kunoichi:
+        return const _MaidenColors(
+          Color(0xFF7A58C0),
+          Color(0xFF241640),
+          Color(0xFF2E2840),
+          Color(0xFF0E0A1A),
+          _HairStyle.sideTail,
+        );
+      case EnemyArchetype.witch:
+        return const _MaidenColors(
+          Color(0xFFB03A52),
+          Color(0xFF3A0E1C),
+          Color(0xFF401826),
+          Color(0xFF140A10),
+          _HairStyle.short,
+        );
+      case EnemyArchetype.succubus:
+        return const _MaidenColors(
+          Color(0xFFE8E4F0),
+          Color(0xFF8A80A0),
+          Color(0xFF5A1836),
+          Color(0xFF180814),
+        );
+      case EnemyArchetype.moonPriestess:
+        return const _MaidenColors(
+          Color(0xFF3A3450),
+          Color(0xFF12102A),
+          Color(0xFFE8E6F0),
+          Color(0xFF9A96B8),
+        );
+      case EnemyArchetype.mermaid:
+        return const _MaidenColors(
+          Color(0xFF3AA8C8),
+          Color(0xFF0C3A4C),
+          Color(0xFF2E88A8),
+          Color(0xFF0A2C3C),
+        );
+      case EnemyArchetype.frostMaiden:
+        return const _MaidenColors(
+          Color(0xFFD8ECF8),
+          Color(0xFF6A9AC0),
+          Color(0xFFE8F2F8),
+          Color(0xFF96BFD8),
+        );
+      case EnemyArchetype.vampire:
+        return const _MaidenColors(
+          Color(0xFF28182A),
+          Color(0xFF0C060E),
+          Color(0xFF4A1A2A),
+          Color(0xFF140810),
+        );
+      case EnemyArchetype.puppeteer:
+        return const _MaidenColors(
+          Color(0xFFC8A2E0),
+          Color(0xFF5A4080),
+          Color(0xFF4A3A60),
+          Color(0xFF161024),
+          _HairStyle.twin,
+        );
+      case EnemyArchetype.machina:
+        return const _MaidenColors(
+          Color(0xFFD8E8E4),
+          Color(0xFF6A9A90),
+          Color(0xFF3A6A60),
+          Color(0xFF0C2020),
+          _HairStyle.short,
+        );
+      case EnemyArchetype.dragonPrincess:
+        return const _MaidenColors(
+          Color(0xFFE87A4A),
+          Color(0xFF7A2A10),
+          Color(0xFF8A4A20),
+          Color(0xFF26100A),
+          _HairStyle.sideTail,
+        );
+      case EnemyArchetype.voidWatcher:
+        return const _MaidenColors(
+          Color(0xFFE8E0F4),
+          Color(0xFF7A6AA0),
+          Color(0xFF3A1A55),
+          Color(0xFF08040F),
+        );
+    }
+  }
+
+  /// 美少女的分层绘制：身后特色 → 后发 → 躯干裙装 → 手臂 → 胸饰 →
+  /// 前发 → 面部 → 裂纹 → 前景特色。
+  static void _paintMaiden(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+    EnemyArchetype archetype,
+  ) {
+    final c = _colorsFor(archetype);
+
+    _paintBackFeature(canvas, w, h, t, theme, pose, archetype);
+
+    _fill(
+      canvas,
+      _buildHair(w, h, t, pose, style: c.hair),
+      theme,
+      pose,
+      0.62,
+      c.hairTop,
+      c.hairBottom,
+    );
+    // 双马尾单独成层：马尾比底发更自由，摆幅也更大。
+    if (c.hair == _HairStyle.twin) {
+      _fill(
+        canvas,
+        _buildTwinTails(w, h, t, pose),
+        theme,
+        pose,
+        0.66,
+        c.hairTop,
+        c.hairBottom,
+      );
+    }
+    _fill(
+      canvas,
+      _buildBody(w, h, t),
+      theme,
+      pose,
+      1.0,
+      c.dressTop,
+      c.dressBottom,
+    );
+    _paintDressShading(canvas, w, h, theme, pose);
+    _fill(
+      canvas,
+      _buildArms(w, h, t),
+      theme,
+      pose,
+      0.96,
+      Color.lerp(c.dressTop, Colors.black, 0.25)!,
+      Color.lerp(c.dressBottom, Colors.black, 0.3)!,
+    );
+    _paintChestGem(canvas, w, h, theme, pose);
+    _fill(
+      canvas,
+      _buildFrontHair(w, h, t, pose, style: c.hair),
+      theme,
+      pose,
+      0.88,
+      Color.lerp(c.hairTop, Colors.white, 0.06)!,
+      Color.lerp(c.hairBottom, Colors.black, 0.2)!,
+    );
+
+    _paintFace(canvas, w, h, theme, pose, t);
+    _paintCracks(canvas, w, h, pose);
+    _paintFrontFeature(canvas, w, h, t, theme, pose, archetype);
+  }
+
+  // ------------------------------------------------------------ 身形构建
+
+  /// 躯干 + 头部 + 脖颈。
+  static Path _buildBody(double w, double h, double t) {
+    final sway = math.sin(t * 1.1) * w * 0.010;
+    final hemWave = math.sin(t * 0.9) * h * 0.008;
+    final path = Path()
+      ..moveTo(-w * 0.108, h * _shoulderY)
+      ..quadraticBezierTo(-w * 0.100, h * _bustY, -w * 0.062, h * _waistY)
+      ..quadraticBezierTo(-w * 0.090, h * _hipY, -w * 0.230, h * 0.79)
+      ..quadraticBezierTo(-w * 0.286, h * 0.855, -w * 0.268, h * _hemY)
+      // 波浪裙摆
+      ..quadraticBezierTo(
+        -w * 0.150,
+        h * (0.862 + hemWave / h),
+        -w * 0.075,
+        h * 0.895,
+      )
+      ..quadraticBezierTo(
+        -w * 0.010 + sway,
+        h * (0.925 + hemWave / h),
+        w * 0.078,
+        h * 0.893,
+      )
+      ..quadraticBezierTo(
+        w * 0.155,
+        h * (0.860 - hemWave / h),
+        w * 0.268,
+        h * _hemY,
+      )
+      ..quadraticBezierTo(w * 0.286, h * 0.855, w * 0.230, h * 0.79)
+      ..quadraticBezierTo(w * 0.090, h * _hipY, w * 0.062, h * _waistY)
+      ..quadraticBezierTo(w * 0.100, h * _bustY, w * 0.108, h * _shoulderY)
+      // 肩线
+      ..quadraticBezierTo(w * 0.055, h * 0.297, 0, h * 0.301)
+      ..quadraticBezierTo(-w * 0.055, h * 0.297, -w * 0.108, h * _shoulderY)
+      ..close();
+
+    // 头部
+    path.addPath(
+      Path()..addOval(
+        Rect.fromCenter(
+          center: Offset(sway * 0.5, h * (_headTop + _eyeY) / 2 + h * 0.012),
+          width: w * 0.132,
+          height: h * 0.155,
+        ),
+      ),
+      Offset.zero,
+    );
+
+    // 脖颈
+    path.addPath(
+      Path()
+        ..moveTo(-w * 0.030, h * 0.255)
+        ..lineTo(w * 0.030, h * 0.255)
+        ..lineTo(w * 0.042, h * 0.315)
+        ..lineTo(-w * 0.042, h * 0.315)
+        ..close(),
+      Offset.zero,
+    );
+    return path;
+  }
+
+  /// 垂在身侧的双臂。
+  static Path _buildArms(double w, double h, double t) {
+    final path = Path();
+    for (final side in [-1.0, 1.0]) {
+      final sway = math.sin(t * 1.3 + (side > 0 ? 1.2 : 0)) * w * 0.006;
+      // 上臂 + 小臂
+      path.addPath(
+        Path()
+          ..moveTo(w * 0.104 * side, h * 0.335)
+          ..quadraticBezierTo(
+            w * 0.163 * side,
+            h * 0.44,
+            w * 0.148 * side + sway,
+            h * 0.545,
+          )
+          ..quadraticBezierTo(
+            w * 0.142 * side + sway,
+            h * 0.60,
+            w * 0.126 * side + sway,
+            h * 0.635,
+          )
+          ..quadraticBezierTo(
+            w * 0.112 * side,
+            h * 0.60,
+            w * 0.104 * side,
+            h * 0.545,
+          )
+          ..quadraticBezierTo(
+            w * 0.106 * side,
+            h * 0.44,
+            w * 0.070 * side,
+            h * 0.352,
+          )
+          ..close(),
+        Offset.zero,
+      );
+      // 手
+      path.addPath(
+        Path()..addOval(
+          Rect.fromCenter(
+            center: Offset(w * 0.124 * side + sway, h * 0.652),
+            width: w * 0.032,
+            height: h * 0.028,
+          ),
+        ),
+        Offset.zero,
+      );
+    }
+    return path;
+  }
+
+  /// 身后的长发。[style] 决定发束的形状与长度。
+  static Path _buildHair(
+    double w,
+    double h,
+    double t,
+    EnemyPose pose, {
+    _HairStyle style = _HairStyle.long,
+  }) {
+    final flutter = 0.010 + pose.phase * 0.004;
+    // 短发系（含马尾底发）只画到肩胛附近的长度的束。
+    final bottom = switch (style) {
+      _HairStyle.long => 0.80,
+      _HairStyle.twin || _HairStyle.sideTail => 0.42,
+      _ => 0.52,
+    };
+    final path = Path();
+    for (final side in [-1.0, 1.0]) {
+      final wave = math.sin(t * 1.5 + (side > 0 ? 0.9 : 0)) * h * flutter;
+      final wave2 = math.sin(t * 1.05 + (side > 0 ? 2.1 : 1.3)) * h * flutter;
+      final wave3 = math.sin(t * 1.8 + side) * h * flutter * 0.7;
+      path.addPath(
+        Path()
+          ..moveTo(w * 0.046 * side, h * 0.115)
+          ..quadraticBezierTo(
+            w * 0.140 * side,
+            h * 0.20 + wave,
+            w * 0.150 * side,
+            h * (0.20 + bottom * 0.30) + wave2,
+          )
+          ..quadraticBezierTo(
+            w * 0.140 * side,
+            h * (bottom - 0.18) + wave,
+            w * 0.104 * side,
+            h * bottom + wave2 * 1.6,
+          )
+          ..quadraticBezierTo(
+            w * 0.126 * side,
+            h * (bottom - 0.22) + wave3,
+            w * 0.112 * side,
+            h * 0.38 + wave3,
+          )
+          ..quadraticBezierTo(
+            w * 0.098 * side,
+            h * 0.21 + wave3,
+            w * 0.016 * side,
+            h * 0.145,
+          )
+          ..close(),
+        Offset.zero,
+      );
+    }
+    if (style == _HairStyle.sideTail) {
+      // 单侧高马尾：从头顶右侧甩出的一条长束。
+      final sway = math.sin(t * 1.6) * h * flutter * 1.4;
+      path.addPath(
+        Path()
+          ..moveTo(w * 0.052, h * 0.10)
+          ..quadraticBezierTo(w * 0.16, h * 0.16 + sway, w * 0.185, h * 0.42)
+          ..quadraticBezierTo(
+            w * 0.19,
+            h * 0.66,
+            w * 0.135,
+            h * 0.82 + sway * 1.6,
+          )
+          ..quadraticBezierTo(
+            w * 0.10,
+            h * 0.62,
+            w * 0.10,
+            h * 0.36 + sway,
+          )
+          ..quadraticBezierTo(w * 0.095, h * 0.18, w * 0.052, h * 0.10)
+          ..close(),
+        Offset.zero,
+      );
+    }
+    return path;
+  }
+
+  /// 双马尾（铃兰）：两条带弧度的侧马尾，随呼吸轻摆。
+  static Path _buildTwinTails(double w, double h, double t, EnemyPose pose) {
+    final flutter = 0.012 + pose.phase * 0.005;
+    final path = Path();
+    for (final side in [-1.0, 1.0]) {
+      final wave = math.sin(t * 1.7 + (side > 0 ? 1.1 : 0)) * h * flutter;
+      path.addPath(
+        Path()
+          ..moveTo(w * 0.096 * side, h * 0.13)
+          ..quadraticBezierTo(
+            w * 0.205 * side,
+            h * 0.22 + wave,
+            w * 0.185 * side,
+            h * 0.50,
+          )
+          ..quadraticBezierTo(
+            w * 0.170 * side,
+            h * 0.76,
+            w * 0.125 * side,
+            h * 0.86 + wave * 1.6,
+          )
+          ..quadraticBezierTo(
+            w * 0.115 * side,
+            h * 0.62,
+            w * 0.128 * side,
+            h * 0.40,
+          )
+          ..quadraticBezierTo(
+            w * 0.135 * side,
+            h * 0.20,
+            w * 0.096 * side,
+            h * 0.13,
+          )
+          ..close(),
+        Offset.zero,
+      );
+    }
+    return path;
+  }
+
+  /// 贴着脸颊的刘海，让头部有层次。
+  static Path _buildFrontHair(
+    double w,
+    double h,
+    double t,
+    EnemyPose pose, {
+    _HairStyle style = _HairStyle.long,
+  }) {
+    final sway = math.sin(t * 1.4) * w * 0.005;
+    final path = Path();
+    for (final side in [-1.0, 1.0]) {
+      path.addPath(
+        Path()
+          ..moveTo(w * 0.012 * side, h * 0.115)
+          ..quadraticBezierTo(
+            w * 0.092 * side,
+            h * 0.155,
+            w * 0.108 * side + sway,
+            h * 0.27,
+          )
+          ..quadraticBezierTo(
+            w * 0.088 * side + sway,
+            h * 0.40,
+            w * 0.052 * side + sway,
+            h * (style == _HairStyle.short ? 0.42 : 0.50),
+          )
+          ..quadraticBezierTo(
+            w * 0.070 * side,
+            h * 0.36,
+            w * 0.056 * side,
+            h * 0.26,
+          )
+          ..quadraticBezierTo(
+            w * 0.040 * side,
+            h * 0.17,
+            w * 0.004 * side,
+            h * 0.145,
+          )
+          ..close(),
+        Offset.zero,
+      );
+    }
+    // 头顶发盖
+    path.addPath(
+      Path()..addOval(
+        Rect.fromCenter(
+          center: Offset(0, h * 0.152),
+          width: w * 0.152,
+          height: h * 0.088,
+        ),
+      ),
+      Offset.zero,
+    );
+    return path;
+  }
+
+  /// 小恶魔角（魅魔）。
+  static Path _buildHorns(double w, double h, double t) {
+    final sway = math.sin(t * 1.3) * w * 0.005;
+    final path = Path();
+    for (final side in [-1.0, 1.0]) {
+      path.addPath(
+        Path()
+          ..moveTo(w * 0.030 * side, h * 0.150)
+          ..quadraticBezierTo(
+            w * 0.090 * side,
+            h * 0.112,
+            w * 0.104 * side + sway,
+            h * 0.062,
+          )
+          ..quadraticBezierTo(
+            w * 0.082 * side,
+            h * 0.106,
+            w * 0.062 * side,
+            h * 0.142,
+          )
+          ..close(),
+        Offset.zero,
+      );
+    }
+    return path;
+  }
+
+  /// 龙角（绫羽）：更长的后弯角，从头顶两侧向斜后上方伸出。
+  static Path _buildDragonHorns(double w, double h, double t) {
+    final sway = math.sin(t * 1.2) * w * 0.006;
+    final path = Path();
+    for (final side in [-1.0, 1.0]) {
+      path.addPath(
+        Path()
+          ..moveTo(w * 0.048 * side, h * 0.135)
+          ..quadraticBezierTo(
+            w * 0.145 * side,
+            h * 0.085,
+            w * 0.185 * side + sway,
+            h * 0.012,
+          )
+          ..quadraticBezierTo(
+            w * 0.150 * side + sway,
+            h * 0.058,
+            w * 0.082 * side,
+            h * 0.108,
+          )
+          ..close(),
+        Offset.zero,
+      );
+    }
+    return path;
+  }
+
+  /// 龙尾（绫羽）：从裙摆后探出的带鳞长尾，尾尖随呼吸摆动。
+  static Path _buildDragonTail(double w, double h, double t) {
+    final sway = math.sin(t * 1.1) * w * 0.015;
+    return Path()
+      ..moveTo(-w * 0.10, h * 0.72)
+      ..quadraticBezierTo(-w * 0.30, h * 0.80, -w * 0.34 + sway, h * 0.62)
+      ..quadraticBezierTo(-w * 0.36 + sway, h * 0.50, -w * 0.30 + sway, h * 0.44)
+      ..quadraticBezierTo(-w * 0.28 + sway, h * 0.56, -w * 0.24, h * 0.66)
+      ..quadraticBezierTo(-w * 0.20, h * 0.76, -w * 0.08, h * 0.76)
+      ..close();
+  }
+
+  /// 裙装的明暗与衣褶：让深色剪影内部有可读的结构。
+  static void _paintDressShading(
+    Canvas canvas,
+    double w,
+    double h,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final hem = h * _hemY;
+    // 胸口到腰的高光
+    final highlight = Path()
+      ..moveTo(-w * 0.086, h * (_bustY - 0.03))
+      ..quadraticBezierTo(
+        -w * 0.040,
+        h * _waistY,
+        -w * 0.072,
+        h * (_hipY + 0.03),
+      )
+      ..quadraticBezierTo(0, h * 0.655, w * 0.072, h * (_hipY + 0.03))
+      ..quadraticBezierTo(
+        w * 0.040,
+        h * _waistY,
+        w * 0.086,
+        h * (_bustY - 0.03),
+      )
+      ..quadraticBezierTo(
+        0,
+        h * (_bustY - 0.065),
+        -w * 0.086,
+        h * (_bustY - 0.03),
+      )
+      ..close();
+    canvas.drawPath(
+      highlight,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, h * _bustY),
+          Offset(0, h * _hipY),
+          [
+            Colors.white.withValues(alpha: 0.12),
+            Colors.white.withValues(alpha: 0.0),
+          ],
+        ),
+    );
+
+    // 裙摆衣褶
+    final fold = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = Colors.white.withValues(alpha: 0.10);
+    for (final offset in [-0.14, -0.06, 0.05, 0.13]) {
+      final path = Path()
+        ..moveTo(w * offset * 0.55, h * (_hipY + 0.02))
+        ..quadraticBezierTo(
+          w * offset,
+          h * 0.74,
+          w * offset * 1.75,
+          hem - h * 0.012,
+        );
+      canvas.drawPath(path, fold);
+    }
+
+    // 裙摆下缘的轮廓提亮
+    canvas.drawPath(
+      Path()
+        ..moveTo(-w * 0.268, hem)
+        ..quadraticBezierTo(-w * 0.150, h * 0.862, -w * 0.075, h * 0.895)
+        ..quadraticBezierTo(0, h * 0.925, w * 0.078, h * 0.893)
+        ..quadraticBezierTo(w * 0.155, h * 0.860, w * 0.268, hem),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6
+        ..strokeCap = StrokeCap.round
+        ..color = theme.withValues(alpha: 0.55 * (1 - pose.dissolve)),
+    );
+
+    // 肩颈处的主题色披肩，强调上半身结构
+    final collar = Path()
+      ..moveTo(-w * 0.108, h * _shoulderY)
+      ..quadraticBezierTo(0, h * 0.288, w * 0.108, h * _shoulderY)
+      ..quadraticBezierTo(w * 0.060, h * 0.352, 0, h * 0.358)
+      ..quadraticBezierTo(-w * 0.060, h * 0.352, -w * 0.108, h * _shoulderY)
+      ..close();
+    canvas.drawPath(
+      collar,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, h * 0.29),
+          Offset(0, h * 0.36),
+          [theme.withValues(alpha: 0.55), theme.withValues(alpha: 0.05)],
+        ),
+    );
+  }
+
+  /// 胸口的契约宝石，随相位变亮。
+  static void _paintChestGem(
+    Canvas canvas,
+    double w,
+    double h,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final glow = 0.5 + pose.phase * 0.14 + (pose.enraged ? 0.3 : 0.0);
+    final center = Offset(0, h * 0.415);
+    final s = w * 0.022;
+    final gem = Path()
+      ..moveTo(center.dx, center.dy - s * 1.4)
+      ..lineTo(center.dx + s, center.dy)
+      ..lineTo(center.dx, center.dy + s * 1.4)
+      ..lineTo(center.dx - s, center.dy)
+      ..close();
+    canvas.drawPath(
+      gem,
+      Paint()
+        ..color = theme.withValues(alpha: glow * 0.6)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.02),
+    );
+    canvas.drawPath(
+      gem,
+      Paint()..color = Color.lerp(theme, Colors.white, 0.55)!,
+    );
+  }
+
+  /// 面部：一张浅色的「脸」，配合发光的眼睛。
+  static void _paintFace(
+    Canvas canvas,
+    double w,
+    double h,
+    Color theme,
+    EnemyPose pose,
+    double t,
+  ) {
+    // 与 _buildBody 中头部椭圆的圆心保持一致
+    final faceCenter = Offset(0, h * 0.177);
+    final faceRect = Rect.fromCenter(
+      center: faceCenter,
+      width: w * 0.120,
+      height: h * 0.132,
+    );
+    canvas.drawOval(
+      faceRect,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          faceRect.topCenter,
+          faceRect.bottomCenter,
+          const [Color(0xFFFBEFF4), Color(0xFFE0C2D4), Color(0xFFA9859F)],
+          const [0.0, 0.45, 1.0],
+        ),
+    );
+
+    final blink = math.sin(t * 0.85) > 0.965 ? 0.12 : 1.0;
+    final glow = (0.65 + pose.phase * 0.12 + (pose.enraged ? 0.4 : 0.0)).clamp(
+      0.0,
+      1.0,
+    );
+    for (final side in [-1.0, 1.0]) {
+      final p = Offset(w * 0.032 * side, h * _eyeY);
+      canvas.drawOval(
+        Rect.fromCenter(center: p, width: w * 0.046, height: h * 0.024 * blink),
+        Paint()
+          ..color = theme.withValues(alpha: glow)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.014),
+      );
+      canvas.drawOval(
+        Rect.fromCenter(center: p, width: w * 0.032, height: h * 0.017 * blink),
+        Paint()..color = Colors.white.withValues(alpha: 0.98),
+      );
+      canvas.drawOval(
+        Rect.fromCenter(center: p, width: w * 0.012, height: h * 0.010 * blink),
+        Paint()..color = theme,
+      );
+    }
+  }
+
+  static void _paintCracks(Canvas canvas, double w, double h, EnemyPose pose) {
+    if (pose.phase <= 0) return;
+    final alpha = (0.22 + pose.phase * 0.2).clamp(0.0, 0.95);
+    final rng = math.Random(97 + pose.phase);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1
+      ..color = const Color(0xFFFFE9F2).withValues(alpha: alpha);
+    for (var i = 0; i < pose.phase * 3; i++) {
+      var p = Offset(
+        (rng.nextDouble() - 0.5) * w * 0.34,
+        h * (0.34 + rng.nextDouble() * 0.42),
+      );
+      final path = Path()..moveTo(p.dx, p.dy);
+      for (var k = 0; k < 3; k++) {
+        p += Offset(
+          (rng.nextDouble() - 0.5) * w * 0.06,
+          rng.nextDouble() * h * 0.045,
+        );
+        path.lineTo(p.dx, p.dy);
+      }
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  // ============================================================ 特色图层
+
+  /// 身后的特色图层：翅膀、月环、披风、齿轮、龙尾……
+  static void _paintBackFeature(
     Canvas canvas,
     double w,
     double h,
@@ -224,29 +988,48 @@ class EnemyArt {
     EnemyArchetype archetype,
   ) {
     switch (archetype) {
-      case EnemyArchetype.wisp:
-        _paintWisp(canvas, w, h, t, theme, pose);
-      case EnemyArchetype.guardian:
-        _paintGuardian(canvas, w, h, t, theme, pose);
-      case EnemyArchetype.assassin:
-        _paintAssassin(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.fairy:
+        _paintFairyWings(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.kunoichi:
+        _paintAfterimages(canvas, w, h, t, theme, pose);
       case EnemyArchetype.witch:
-      case EnemyArchetype.enchantress:
-        _paintEnchantress(canvas, w, h, t, theme, pose, archetype);
-      case EnemyArchetype.warlord:
-        _paintWarlord(canvas, w, h, t, theme, pose);
+        _paintDolls(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.succubus:
+        _paintTendrils(canvas, w, h, t, pose);
+        _paintBatWings(canvas, w, h, t, theme, pose, big: false);
+      case EnemyArchetype.moonPriestess:
+        _paintMoonDisc(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.mermaid:
+        _paintBubbles(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.frostMaiden:
+        _paintIceSpikes(canvas, w, h, t, theme, pose);
+        _paintSnowfall(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.vampire:
+        _paintBatWings(canvas, w, h, t, theme, pose, big: true);
+      case EnemyArchetype.puppeteer:
+        _paintMirrors(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.machina:
+        _paintGearHalo(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.dragonPrincess:
+        _fill(
+          canvas,
+          _buildDragonTail(w, h, t),
+          theme,
+          pose,
+          0.7,
+          const Color(0xFF7A3A18),
+          const Color(0xFF260C06),
+        );
+        _paintFireFeathers(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.voidWatcher:
+        _paintStarRing(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.saint:
+        break; // 圣女的标志（塔盾）在前景层
     }
   }
 
-  // ============================================================ 巫女 / 魔女
-
-  /// 悬浮的暗影魔女（血月巫女与深渊魔女共用一套身形）。
-  /// 身形比例（相对画布高度 h）：
-  ///   角尖 0.05 · 头顶 0.13 · 眼睛 0.205 · 下巴 0.27 · 肩 0.325
-  ///   胸 0.40 · 腰 0.53 · 胯 0.60 · 裙摆 0.90
-  /// 深渊魔女（enchantress）比巫女多一对从肩后探出的深渊触须——
-  /// 同族不同阶，靠触须与更深的配色区分。
-  static void _paintEnchantress(
+  /// 前景的特色图层：武器、帽子、灯、丝线……
+  static void _paintFrontFeature(
     Canvas canvas,
     double w,
     double h,
@@ -255,77 +1038,193 @@ class EnemyArt {
     EnemyPose pose,
     EnemyArchetype archetype,
   ) {
-    if (archetype == EnemyArchetype.enchantress) {
-      _fill(
-        canvas,
-        _buildTendrils(w, h, t, pose),
-        theme,
-        pose,
-        0.55,
-        const Color(0xFF2A0F1E),
-        const Color(0xFF0D0410),
-      );
+    switch (archetype) {
+      case EnemyArchetype.fairy:
+        _paintEars(canvas, w, h, theme, pose);
+        _paintPetals(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.saint:
+        _paintTowerShield(canvas, w, h, t, theme, pose);
+        _paintHalo(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.kunoichi:
+        _paintTwinBlades(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.witch:
+        _paintWitchHat(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.succubus:
+        _fill(canvas, _buildHorns(w, h, t), theme, pose, 0.9,
+            const Color(0xFF4A1830), const Color(0xFF180814));
+      case EnemyArchetype.moonPriestess:
+        _paintShrineRibbons(canvas, w, h, t, theme, pose);
+        _paintLanterns(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.mermaid:
+        _paintEars(canvas, w, h, theme, pose);
+        _paintShellPin(canvas, w, h, theme, pose);
+      case EnemyArchetype.frostMaiden:
+        _paintIceCrown(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.vampire:
+        _paintGoblet(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.puppeteer:
+        _paintScissors(canvas, w, h, t, theme, pose);
+        _paintThreads(canvas, w, h, t, theme, pose);
+      case EnemyArchetype.machina:
+        _paintVisor(canvas, w, h, theme, pose);
+      case EnemyArchetype.dragonPrincess:
+        _fill(canvas, _buildDragonHorns(w, h, t), theme, pose, 0.9,
+            const Color(0xFF9A5A28), const Color(0xFF33140A));
+        _paintScaleShoulders(canvas, w, h, theme, pose);
+      case EnemyArchetype.voidWatcher:
+        _paintVortex(canvas, w, h, t, theme, pose);
     }
-    final hair = _buildHair(w, h, t, pose, back: true);
-    final body = _buildBody(w, h, t, pose);
-    final arms = _buildArms(w, h, t, pose);
-    final frontHair = _buildFrontHair(w, h, t, pose);
-    final horns = _buildHorns(w, h, t);
-
-    _fill(
-      canvas,
-      hair,
-      theme,
-      pose,
-      0.62,
-      const Color(0xFF1B1030),
-      const Color(0xFF0A0514),
-    );
-    _fill(
-      canvas,
-      body,
-      theme,
-      pose,
-      1.0,
-      const Color(0xFF4E3580),
-      const Color(0xFF180E2C),
-    );
-    _paintDressShading(canvas, w, h, theme, pose);
-    _fill(
-      canvas,
-      arms,
-      theme,
-      pose,
-      0.96,
-      const Color(0xFF33204F),
-      const Color(0xFF150C28),
-    );
-    _paintChestGem(canvas, w, h, theme, pose);
-    _fill(
-      canvas,
-      horns,
-      theme,
-      pose,
-      0.9,
-      const Color(0xFF33204F),
-      const Color(0xFF120A22),
-    );
-    _fill(
-      canvas,
-      frontHair,
-      theme,
-      pose,
-      0.88,
-      const Color(0xFF1D1132),
-      const Color(0xFF0A0516),
-    );
-
-    _paintFace(canvas, w, h, theme, pose, t);
-    _paintCracks(canvas, w, h, pose);
   }
 
-  /// 深渊魔女肩后的触须：细长的锥形曲线，随呼吸缓慢摆动。
-  static Path _buildTendrils(double w, double h, double t, EnemyPose pose) {
+  // ---------------- 身后系 ----------------
+
+  /// 妖精的半透明薄翅：两对椭圆瓣，随时间轻轻开合。
+  static void _paintFairyWings(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final open = 1 + math.sin(t * 2.2) * 0.08;
+    for (final side in [-1.0, 1.0]) {
+      for (final layer in [0, 1]) {
+        final len = layer == 0 ? 0.30 : 0.22;
+        final lift = layer == 0 ? 0.30 : 0.06;
+        final path = Path()
+          ..moveTo(w * 0.05 * side, h * 0.34)
+          ..quadraticBezierTo(
+            w * (0.14 + len * 0.9) * side * open,
+            h * (0.34 - lift) * (layer == 0 ? 1.0 : 0.7),
+            w * (0.10 + len) * side * open,
+            h * (0.36 - lift * 1.5),
+          )
+          ..quadraticBezierTo(
+            w * (0.12 + len * 0.6) * side * open,
+            h * 0.42,
+            w * 0.05 * side,
+            h * 0.40,
+          )
+          ..close();
+        canvas.drawPath(
+          path,
+          Paint()
+            ..shader = ui.Gradient.linear(
+              Offset(w * 0.05 * side, h * 0.30),
+              Offset(w * (0.10 + len) * side * open, h * 0.42),
+              [
+                theme.withValues(alpha: 0.34 * (1 - pose.dissolve)),
+                Colors.white.withValues(alpha: 0.10 * (1 - pose.dissolve)),
+              ],
+            ),
+        );
+        canvas.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.1
+            ..color = theme.withValues(alpha: 0.5 * (1 - pose.dissolve)),
+        );
+      }
+    }
+  }
+
+  /// 忍者的残影：身侧两道斜向的半透明衣袖弧，静止时也在"分身"。
+  static void _paintAfterimages(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (var i = 0; i < 2; i++) {
+      final side = i == 0 ? -1.0 : 1.0;
+      final drift = math.sin(t * 1.9 + i * 2.1) * w * 0.012;
+      final path = Path()
+        ..moveTo(w * 0.10 * side, h * 0.32)
+        ..quadraticBezierTo(
+          w * (0.20 + i * 0.04) * side + drift,
+          h * 0.48,
+          w * (0.16 + i * 0.05) * side + drift,
+          h * 0.68,
+        )
+        ..quadraticBezierTo(
+          w * (0.12 + i * 0.04) * side + drift,
+          h * 0.62,
+          w * 0.06 * side,
+          h * 0.44,
+        )
+        ..close();
+      canvas.drawPath(
+        path,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(w * 0.10 * side, h * 0.32),
+            Offset(w * 0.16 * side + drift, h * 0.68),
+            [
+              theme.withValues(alpha: 0.20 * (1 - pose.dissolve)),
+              Colors.transparent,
+            ],
+          ),
+      );
+    }
+  }
+
+  /// 魔女悬浮的布偶与针：她替人缝住疼痛的见证。
+  static void _paintDolls(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (var i = 0; i < 2; i++) {
+      final side = i == 0 ? -1.0 : 1.0;
+      final bob = math.sin(t * 1.4 + i * 2.4) * h * 0.012;
+      final cx = w * 0.30 * side;
+      final cy = h * (0.52 + i * 0.12) + bob;
+      final s = w * 0.035;
+      final doll = Path()
+        ..moveTo(cx, cy - s * 1.1)
+        ..quadraticBezierTo(cx + s, cy - s * 0.6, cx + s * 0.7, cy + s * 0.8)
+        ..lineTo(cx, cy + s * 1.3)
+        ..lineTo(cx - s * 0.7, cy + s * 0.8)
+        ..quadraticBezierTo(cx - s, cy - s * 0.6, cx, cy - s * 1.1)
+        ..close();
+      canvas.drawPath(
+        doll,
+        Paint()
+          ..color = const Color(0xFF2A0E18).withValues(alpha: 0.92)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.2),
+      );
+      canvas.drawCircle(
+        Offset(cx, cy - s * 0.5),
+        s * 0.30,
+        Paint()..color = theme.withValues(alpha: 0.5 * (1 - pose.dissolve)),
+      );
+      // 一根缝针斜插
+      canvas.drawLine(
+        Offset(cx - s * 1.1, cy + s * 0.4),
+        Offset(cx + s * 0.9, cy - s * 0.9),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..color = Colors.white.withValues(alpha: 0.4 * (1 - pose.dissolve)),
+      );
+    }
+  }
+
+  /// 魅魔肩后的深渊触须：细长的锥形曲线，随呼吸缓慢摆动。
+  static void _paintTendrils(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    EnemyPose pose,
+  ) {
     final path = Path();
     for (final side in [-1.0, 1.0]) {
       final sway = math.sin(t * 1.2 + (side > 0 ? 1.6 : 0)) * w * 0.02;
@@ -354,122 +1253,84 @@ class EnemyArt {
         Offset.zero,
       );
     }
-    return path;
-  }
-
-  // ============================================================ 迷雾鬼火
-
-  /// 火焰幽灵：一团青色的火苗，底宽上尖，内里是更亮的焰心与两只空洞眼。
-  /// 没有身体结构——它的"攻击性"来自形态本身的飘忽。
-  static void _paintWisp(
-    Canvas canvas,
-    double w,
-    double h,
-    double t,
-    Color theme,
-    EnemyPose pose,
-  ) {
-    // 外焰：泪滴形，随时间轻轻摇曳，低相位时火焰更收敛。
-    final lean = math.sin(t * 1.6) * w * 0.035;
-    final flicker = math.sin(t * 3.1) * h * 0.012;
-    final flame = Path()
-      ..moveTo(0, h * (0.06 + flicker / h) + lean)
-      ..quadraticBezierTo(w * 0.30, h * 0.22, w * 0.34, h * 0.50)
-      ..quadraticBezierTo(w * 0.36, h * 0.74, w * 0.20, h * 0.86)
-      // 底缘的火舌波浪
-      ..quadraticBezierTo(w * 0.12, h * 0.92, w * 0.05, h * 0.86)
-      ..quadraticBezierTo(0, h * 0.94, -w * 0.06, h * 0.86)
-      ..quadraticBezierTo(-w * 0.13, h * 0.92, -w * 0.20, h * 0.86)
-      ..quadraticBezierTo(-w * 0.36, h * 0.74, -w * 0.34, h * 0.50)
-      ..quadraticBezierTo(
-        -w * 0.30,
-        h * 0.22,
-        0,
-        h * (0.06 + flicker / h) + lean,
-      )
-      ..close();
     _fill(
       canvas,
-      flame,
-      theme,
+      path,
+      Colors.white,
       pose,
-      0.9,
-      const Color(0xFF2E6E68),
-      const Color(0xFF0E2724),
+      0.55,
+      const Color(0xFF2A0F1E),
+      const Color(0xFF0D0410),
     );
+  }
 
-    // 焰心：一道竖向亮带，是整个身体的"光源"。
-    final core = Path()
-      ..moveTo(0, h * 0.17 + lean * 0.6)
-      ..quadraticBezierTo(w * 0.14, h * 0.34, w * 0.15, h * 0.55)
-      ..quadraticBezierTo(w * 0.14, h * 0.72, 0, h * 0.80)
-      ..quadraticBezierTo(-w * 0.14, h * 0.72, -w * 0.15, h * 0.55)
-      ..quadraticBezierTo(-w * 0.14, h * 0.34, 0, h * 0.17 + lean * 0.6)
-      ..close();
-    canvas.drawPath(
-      core,
-      Paint()
-        ..shader = ui.Gradient.radial(
-          Offset(0, h * 0.50),
-          h * 0.34,
-          [
-            Color.lerp(theme, Colors.white, 0.55)!.withValues(alpha: 0.55),
-            theme.withValues(alpha: 0.10),
-            Colors.transparent,
-          ],
-          const [0.0, 0.5, 1.0],
-        ),
-    );
-
-    // 双眼：焰心里的两只深色空穴，比任何表情都更像"残念"。
-    final blink = math.sin(t * 0.85) > 0.965 ? 0.12 : 1.0;
+  /// 蝙蝠翅：魅魔的小翅与吸血鬼的披风大翅共用骨架。
+  static void _paintBatWings(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose, {
+    required bool big,
+  }) {
+    final span = big ? 0.42 : 0.30;
+    final lift = big ? 0.20 : 0.14;
     for (final side in [-1.0, 1.0]) {
-      final p = Offset(w * 0.062 * side + lean * 0.5, h * 0.40);
-      canvas.drawOval(
-        Rect.fromCenter(center: p, width: w * 0.052, height: h * 0.042 * blink),
-        Paint()..color = const Color(0xFF03110F).withValues(alpha: 0.9),
-      );
-      canvas.drawOval(
-        Rect.fromCenter(
-          center: p.translate(0, -h * 0.004),
-          width: w * 0.022,
-          height: h * 0.014 * blink,
-        ),
-        Paint()..color = Colors.white.withValues(alpha: 0.5),
-      );
-    }
-
-    // 底部的雾尾：三缕从火焰下方拖出的烟。
-    final mist = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    for (var i = 0; i < 3; i++) {
-      final drift = math.sin(t * 1.1 + i * 2.2) * w * 0.03;
-      final x = (i - 1) * w * 0.12;
-      mist
-        ..strokeWidth = w * (0.030 - i * 0.006)
-        ..color = theme.withValues(
-          alpha: (0.30 - i * 0.07) * (1 - pose.dissolve),
-        );
+      final flap = math.sin(t * 1.7 + (side > 0 ? 0.8 : 0)) * 0.05;
+      final top = Path()
+        ..moveTo(w * 0.06 * side, h * 0.34)
+        ..quadraticBezierTo(
+          w * (0.20 + span * 0.5) * side,
+          h * (0.30 - lift - flap),
+          w * span * 1.6 * side,
+          h * (0.38 - lift * 1.4 - flap),
+        )
+        // 膜的下缘两个内凹扇边
+        ..quadraticBezierTo(
+          w * span * 1.15 * side,
+          h * 0.42,
+          w * span * 1.05 * side,
+          h * (0.40 - lift * 0.4),
+        )
+        ..quadraticBezierTo(
+          w * span * 0.75 * side,
+          h * 0.46,
+          w * span * 0.62 * side,
+          h * (0.44 - lift * 0.2),
+        )
+        ..quadraticBezierTo(
+          w * span * 0.38 * side,
+          h * 0.48,
+          w * 0.06 * side,
+          h * 0.44,
+        )
+        ..close();
       canvas.drawPath(
-        Path()
-          ..moveTo(x, h * 0.87)
-          ..quadraticBezierTo(
-            x + drift,
-            h * 0.93,
-            x + drift * 1.8,
-            h * (0.97 + i * 0.01),
+        top,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(w * 0.06 * side, h * 0.30),
+            Offset(w * span * 1.5 * side, h * 0.44),
+            [
+              Color.lerp(theme, Colors.white, 0.25)!
+                  .withValues(alpha: 0.30 * (1 - pose.dissolve)),
+              const Color(0xFF180A20).withValues(alpha: 0.92),
+            ],
           ),
-        mist,
+      );
+      canvas.drawPath(
+        top,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.3
+          ..color = theme.withValues(alpha: 0.55 * (1 - pose.dissolve)),
       );
     }
   }
 
-  // ============================================================ 石甲守卫
-
-  /// 石甲巨人：宽厚的梯形石甲 + 一侧巨盾 + 头盔缝眼，脚下踩着碎石。
-  /// 它的存在感来自"宽"——同一画布里它比其他角色横向占得多。
-  static void _paintGuardian(
+  /// 月祭司的圆月：身后一轮缓缓呼吸的满月。
+  static void _paintMoonDisc(
     Canvas canvas,
     double w,
     double h,
@@ -477,29 +1338,375 @@ class EnemyArt {
     Color theme,
     EnemyPose pose,
   ) {
-    // 脚下的浮空碎石：随时间轻轻升降。
-    for (var i = 0; i < 4; i++) {
+    final c = Offset(0, h * 0.26);
+    final r = w * (0.30 + math.sin(t * 0.8) * 0.008);
+    canvas.drawCircle(
+      c,
+      r,
+      Paint()
+        ..shader = ui.Gradient.radial(c, r * 1.15, [
+          theme.withValues(alpha: 0.30 * (1 - pose.dissolve)),
+          theme.withValues(alpha: 0.08 * (1 - pose.dissolve)),
+          Colors.transparent,
+        ], const [0.0, 0.5, 1.0]),
+    );
+    canvas.drawCircle(
+      c,
+      r * 0.62,
+      Paint()
+        ..color = Color.lerp(theme, Colors.white, 0.4)!
+            .withValues(alpha: 0.20 * (1 - pose.dissolve)),
+    );
+    // 月面暗斑
+    canvas.drawCircle(
+      c.translate(-r * 0.2, -r * 0.12),
+      r * 0.12,
+      Paint()..color = theme.withValues(alpha: 0.14 * (1 - pose.dissolve)),
+    );
+    canvas.drawCircle(
+      c.translate(r * 0.16, r * 0.2),
+      r * 0.08,
+      Paint()..color = theme.withValues(alpha: 0.12 * (1 - pose.dissolve)),
+    );
+  }
+
+  /// 人鱼的水泡：从裙摆两侧升起的一串气泡。
+  static void _paintBubbles(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (var i = 0; i < 7; i++) {
       final side = i.isEven ? -1.0 : 1.0;
-      final bob = math.sin(t * 1.3 + i * 1.9) * h * 0.012;
-      final rock = Path()
-        ..moveTo(w * (0.16 + i * 0.05) * side, h * 0.93 + bob)
-        ..lineTo(w * (0.22 + i * 0.05) * side, h * 0.89 + bob)
-        ..lineTo(w * (0.28 + i * 0.05) * side, h * 0.93 + bob)
-        ..lineTo(w * (0.22 + i * 0.05) * side, h * 0.97 + bob)
-        ..close();
-      _fill(
-        canvas,
-        rock,
-        theme,
-        pose,
-        0.5,
-        const Color(0xFF5C4A22),
-        const Color(0xFF241C0C),
+      final phase = (t * 0.35 + i * 0.37) % 1.0;
+      final y = h * (0.86 - phase * 0.55);
+      final x =
+          w * (0.22 + 0.10 * (i % 3)) * side + math.sin(t * 1.3 + i) * w * 0.02;
+      final r = w * (0.008 + 0.006 * (i % 2)) * (1 - phase * 0.3);
+      canvas.drawCircle(
+        Offset(x, y),
+        r,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.1
+          ..color = theme.withValues(alpha: 0.5 * (1 - pose.dissolve)),
+      );
+      canvas.drawCircle(
+        Offset(x - r * 0.3, y - r * 0.3),
+        r * 0.24,
+        Paint()..color = Colors.white.withValues(alpha: 0.35 * (1 - pose.dissolve)),
       );
     }
+  }
 
-    // 巨盾：举在身前（画面右侧）的圆形塔盾，带一圈铆钉环。
-    final shieldC = Offset(w * 0.30, h * 0.50);
+  /// 冰姬脚下的冰棱：一簇向上的尖锥，随相位更锋利。
+  static void _paintIceSpikes(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final glint = math.sin(t * 1.8) * 0.15;
+    for (var i = 0; i < 5; i++) {
+      final x = (i - 2) * w * 0.115;
+      final height = h * (0.10 + 0.05 * (i.isEven ? 1 : 0) + pose.phase * 0.012);
+      final path = Path()
+        ..moveTo(x - w * 0.035, h * 0.96)
+        ..lineTo(x + w * 0.012, h * (0.96 - height / h))
+        ..lineTo(x + w * 0.035, h * 0.96)
+        ..close();
+      canvas.drawPath(
+        path,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(x, h * 0.96 - height),
+            Offset(x, h * 0.96),
+            [
+              Color.lerp(theme, Colors.white, 0.5)!
+                  .withValues(alpha: (0.55 + glint) * (1 - pose.dissolve)),
+              const Color(0xFF14303E).withValues(alpha: 0.85),
+            ],
+          ),
+      );
+    }
+  }
+
+  /// 冰姬的落雪：几片慢速飘落的雪晶。
+  static void _paintSnowfall(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (var i = 0; i < 6; i++) {
+      final phase = (t * 0.14 + i * 0.31) % 1.0;
+      final y = h * (phase * 1.1 - 0.05);
+      final x = w * (0.14 + 0.14 * (i % 5)) + math.sin(t * 0.9 + i) * w * 0.02;
+      canvas.drawCircle(
+        Offset(x, y),
+        1.1 + (i % 2) * 0.8,
+        Paint()..color = Colors.white.withValues(alpha: 0.5 * (1 - pose.dissolve)),
+      );
+    }
+  }
+
+  /// 傀儡师环绕的镜片：旋转的菱形碎片。
+  static void _paintMirrors(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (var i = 0; i < 4; i++) {
+      final a = t * 0.5 + i * math.pi / 2;
+      final p = Offset(
+        w * 0.40 * math.cos(a),
+        h * 0.42 + h * 0.20 * math.sin(a * 1.2),
+      );
+      final s = w * 0.030;
+      canvas.save();
+      canvas.translate(p.dx, p.dy);
+      canvas.rotate(a + math.pi / 4);
+      final shard = Path()
+        ..moveTo(0, -s * 1.5)
+        ..lineTo(s * 0.7, 0)
+        ..lineTo(0, s * 1.5)
+        ..lineTo(-s * 0.7, 0)
+        ..close();
+      canvas.drawPath(
+        shard,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(0, -s * 1.5),
+            Offset(0, s * 1.5),
+            [
+              Colors.white.withValues(alpha: 0.30 * (1 - pose.dissolve)),
+              theme.withValues(alpha: 0.18 * (1 - pose.dissolve)),
+            ],
+          ),
+      );
+      canvas.drawPath(
+        shard,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0
+          ..color = theme.withValues(alpha: 0.6 * (1 - pose.dissolve)),
+      );
+      canvas.restore();
+    }
+  }
+
+  /// 巫姬背后的齿轮光环：一圈慢转的齿 + 中央细环。
+  static void _paintGearHalo(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final c = Offset(0, h * 0.30);
+    final r = w * 0.30;
+    canvas.save();
+    canvas.translate(c.dx, c.dy);
+    canvas.rotate(t * 0.35);
+    final tooth = Paint()
+      ..color = theme.withValues(alpha: 0.42 * (1 - pose.dissolve));
+    for (var i = 0; i < 12; i++) {
+      final a = math.pi * 2 / 12 * i;
+      canvas.drawRect(
+        Rect.fromCenter(
+          center: Offset(r * math.cos(a), r * math.sin(a)),
+          width: w * 0.045,
+          height: w * 0.016,
+        ),
+        tooth,
+      );
+    }
+    canvas.drawCircle(
+      Offset.zero,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.014
+        ..color = theme.withValues(alpha: 0.35 * (1 - pose.dissolve)),
+    );
+    canvas.restore();
+    canvas.drawCircle(
+      c,
+      r * 0.70,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.1
+        ..color = Colors.white.withValues(alpha: 0.16 * (1 - pose.dissolve)),
+    );
+  }
+
+  /// 龙女环绕的火羽：几片上飘的赤色羽屑。
+  static void _paintFireFeathers(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (var i = 0; i < 6; i++) {
+      final side = i.isEven ? -1.0 : 1.0;
+      final phase = (t * 0.22 + i * 0.29) % 1.0;
+      final y = h * (0.72 - phase * 0.5);
+      final x = w * (0.26 + 0.06 * (i % 3)) * side + math.sin(t + i) * w * 0.02;
+      final s = w * 0.016;
+      canvas.save();
+      canvas.translate(x, y);
+      canvas.rotate(math.sin(t * 1.2 + i) * 0.6);
+      final feather = Path()
+        ..moveTo(0, -s * 2)
+        ..quadraticBezierTo(s, 0, 0, s * 2)
+        ..quadraticBezierTo(-s, 0, 0, -s * 2)
+        ..close();
+      canvas.drawPath(
+        feather,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(0, -s * 2),
+            Offset(0, s * 2),
+            [
+              Color.lerp(theme, Colors.yellow, 0.35)!
+                  .withValues(alpha: 0.6 * (1 - phase) * (1 - pose.dissolve)),
+              theme.withValues(alpha: 0.15 * (1 - phase)),
+            ],
+          ),
+      );
+      canvas.restore();
+    }
+  }
+
+  /// 观测者的星环：身后一道倾斜的椭圆环 + 环上的碎星。
+  static void _paintStarRing(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    // 碎星
+    for (var i = 0; i < 7; i++) {
+      final a = t * (0.22 + 0.03 * i) + i * 0.9;
+      final rr = w * (0.42 + 0.04 * (i % 3));
+      final p = Offset(
+        rr * math.cos(a),
+        h * 0.40 + h * 0.15 * math.sin(a * 1.4),
+      );
+      canvas.drawCircle(
+        p,
+        w * (0.005 + 0.003 * (i % 2)),
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.35 * (1 - pose.dissolve)),
+      );
+    }
+    // 倾斜星环
+    canvas.save();
+    canvas.translate(0, h * 0.40);
+    canvas.rotate(-0.30);
+    canvas.scale(1.0, 0.30);
+    canvas.drawCircle(
+      Offset.zero,
+      w * 0.40,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.010
+        ..shader = ui.Gradient.sweep(
+          Offset.zero,
+          [
+            theme.withValues(alpha: 0.7 * (1 - pose.dissolve)),
+            Colors.transparent,
+            theme.withValues(alpha: 0.4 * (1 - pose.dissolve)),
+          ],
+          const [0.0, 0.6, 1.0],
+          TileMode.repeated,
+        ),
+    );
+    canvas.restore();
+  }
+
+  // ---------------- 前景系 ----------------
+
+  /// 妖精与真珠的尖耳（fairy / mermaid 共用）。
+  static void _paintEars(
+    Canvas canvas,
+    double w,
+    double h,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (final side in [-1.0, 1.0]) {
+      _fill(
+        canvas,
+        Path()
+          ..moveTo(w * 0.058 * side, h * 0.165)
+          ..lineTo(w * 0.115 * side, h * 0.125)
+          ..lineTo(w * 0.062 * side, h * 0.215)
+          ..close(),
+        theme,
+        pose,
+        0.95,
+        const Color(0xFFFBEFF4),
+        const Color(0xFFB090A4),
+      );
+    }
+  }
+
+  /// 妖精环绕的花瓣。
+  static void _paintPetals(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (var i = 0; i < 5; i++) {
+      final side = i.isEven ? -1.0 : 1.0;
+      final phase = (t * 0.18 + i * 0.41) % 1.0;
+      final y = h * (0.30 + phase * 0.55);
+      final x = w * (0.30 + 0.05 * (i % 3)) * side + math.sin(t + i * 2) * w * 0.015;
+      canvas.save();
+      canvas.translate(x, y);
+      canvas.rotate(t * (0.8 + i * 0.2) + i);
+      final petal = Path()
+        ..moveTo(0, -w * 0.014)
+        ..quadraticBezierTo(w * 0.011, 0, 0, w * 0.014)
+        ..quadraticBezierTo(-w * 0.011, 0, 0, -w * 0.014)
+        ..close();
+      canvas.drawPath(
+        petal,
+        Paint()..color = theme.withValues(alpha: 0.65 * (1 - phase) * (1 - pose.dissolve)),
+      );
+      canvas.restore();
+    }
+  }
+
+  /// 圣女的塔盾：举在身前的圆形塔盾，带一圈旋转的光点环。
+  static void _paintTowerShield(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final shieldC = Offset(w * 0.30, h * 0.52);
     final shieldR = w * 0.155;
     canvas.drawCircle(
       shieldC,
@@ -508,7 +1715,7 @@ class EnemyArt {
         ..shader = ui.Gradient.radial(
           shieldC.translate(-shieldR * 0.3, -shieldR * 0.3),
           shieldR * 1.7,
-          const [Color(0xFF8A6E33), Color(0xFF3D2E10), Color(0xFF1A1206)],
+          const [Color(0xFFEFE4C8), Color(0xFF9A8A5C), Color(0xFF3A3220)],
           const [0.0, 0.55, 1.0],
         ),
     );
@@ -526,7 +1733,7 @@ class EnemyArt {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = w * 0.006
-        ..color = Colors.white.withValues(alpha: 0.16),
+        ..color = Colors.white.withValues(alpha: 0.2),
     );
     for (var i = 0; i < 8; i++) {
       final a = math.pi * 2 / 8 * i + t * 0.15;
@@ -539,136 +1746,28 @@ class EnemyArt {
         Paint()..color = theme.withValues(alpha: 0.8 * (1 - pose.dissolve)),
       );
     }
-    // 盾心的纹章：竖直的棱形槽。
+    // 盾心的圣纹：竖直的十字槽。
     canvas.drawPath(
       Path()
-        ..moveTo(shieldC.dx, shieldC.dy - shieldR * 0.4)
-        ..lineTo(shieldC.dx + shieldR * 0.14, shieldC.dy)
-        ..lineTo(shieldC.dx, shieldC.dy + shieldR * 0.4)
-        ..lineTo(shieldC.dx - shieldR * 0.14, shieldC.dy)
+        ..moveTo(shieldC.dx - shieldR * 0.1, shieldC.dy - shieldR * 0.42)
+        ..lineTo(shieldC.dx + shieldR * 0.1, shieldC.dy - shieldR * 0.42)
+        ..lineTo(shieldC.dx + shieldR * 0.1, shieldC.dy - shieldR * 0.1)
+        ..lineTo(shieldC.dx + shieldR * 0.38, shieldC.dy - shieldR * 0.1)
+        ..lineTo(shieldC.dx + shieldR * 0.38, shieldC.dy + shieldR * 0.1)
+        ..lineTo(shieldC.dx + shieldR * 0.1, shieldC.dy + shieldR * 0.1)
+        ..lineTo(shieldC.dx + shieldR * 0.1, shieldC.dy + shieldR * 0.42)
+        ..lineTo(shieldC.dx - shieldR * 0.1, shieldC.dy + shieldR * 0.42)
+        ..lineTo(shieldC.dx - shieldR * 0.1, shieldC.dy + shieldR * 0.1)
+        ..lineTo(shieldC.dx - shieldR * 0.38, shieldC.dy + shieldR * 0.1)
+        ..lineTo(shieldC.dx - shieldR * 0.38, shieldC.dy - shieldR * 0.1)
+        ..lineTo(shieldC.dx - shieldR * 0.1, shieldC.dy - shieldR * 0.1)
         ..close(),
       Paint()..color = theme.withValues(alpha: 0.45 * (1 - pose.dissolve)),
     );
-
-    // 躯干：上宽下略窄的石甲，两肩是凸出的甲块。
-    final body = Path()
-      ..moveTo(-w * 0.30, h * 0.30)
-      ..quadraticBezierTo(-w * 0.36, h * 0.46, -w * 0.30, h * 0.66)
-      ..quadraticBezierTo(-w * 0.26, h * 0.88, -w * 0.16, h * 0.90)
-      ..lineTo(w * 0.16, h * 0.90)
-      ..quadraticBezierTo(w * 0.26, h * 0.88, w * 0.30, h * 0.66)
-      ..quadraticBezierTo(w * 0.36, h * 0.46, w * 0.30, h * 0.30)
-      // 肩线与肩甲
-      ..quadraticBezierTo(w * 0.22, h * 0.245, 0, h * 0.25)
-      ..quadraticBezierTo(-w * 0.22, h * 0.245, -w * 0.30, h * 0.30)
-      ..close();
-    _fill(
-      canvas,
-      body,
-      theme,
-      pose,
-      1.0,
-      const Color(0xFF7A6230),
-      const Color(0xFF241A0A),
-    );
-
-    // 双肩甲块
-    for (final side in [-1.0, 1.0]) {
-      final pad = Path()
-        ..moveTo(w * 0.24 * side, h * 0.26)
-        ..quadraticBezierTo(
-          w * 0.40 * side,
-          h * 0.27,
-          w * 0.42 * side,
-          h * 0.36,
-        )
-        ..quadraticBezierTo(
-          w * 0.40 * side,
-          h * 0.44,
-          w * 0.30 * side,
-          h * 0.44,
-        )
-        ..quadraticBezierTo(
-          w * 0.22 * side,
-          h * 0.40,
-          w * 0.24 * side,
-          h * 0.26,
-        )
-        ..close();
-      _fill(
-        canvas,
-        pad,
-        theme,
-        pose,
-        0.95,
-        const Color(0xFF8A7038),
-        const Color(0xFF2C2008),
-      );
-    }
-
-    // 甲片缝：三道横缝让石甲有"块"的读感。
-    final seam = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
-      ..color = Colors.black.withValues(alpha: 0.30);
-    for (final y in [0.40, 0.54, 0.68]) {
-      final width = w * (0.30 - (y - 0.40) * 0.22);
-      canvas.drawLine(Offset(-width, h * y), Offset(width, h * y), seam);
-    }
-
-    // 头盔：矮方盔 + 一道横向发光缝眼。
-    final helm = Path()
-      ..moveTo(-w * 0.11, h * 0.245)
-      ..lineTo(-w * 0.12, h * 0.14)
-      ..quadraticBezierTo(0, h * 0.095, w * 0.12, h * 0.14)
-      ..lineTo(w * 0.11, h * 0.245)
-      ..close();
-    _fill(
-      canvas,
-      helm,
-      theme,
-      pose,
-      0.98,
-      const Color(0xFF8A7038),
-      const Color(0xFF2C2008),
-    );
-    // 盔顶脊线
-    canvas.drawLine(
-      Offset(0, h * 0.10),
-      Offset(0, h * 0.20),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = w * 0.014
-        ..color = theme.withValues(alpha: 0.55 * (1 - pose.dissolve)),
-    );
-    final glow = 0.7 + pose.phase * 0.12 + (pose.enraged ? 0.35 : 0.0);
-    canvas.drawRect(
-      Rect.fromCenter(
-        center: Offset(0, h * 0.185),
-        width: w * 0.17,
-        height: h * 0.020,
-      ),
-      Paint()
-        ..color = theme.withValues(alpha: glow * 0.5)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.012),
-    );
-    canvas.drawRect(
-      Rect.fromCenter(
-        center: Offset(0, h * 0.185),
-        width: w * 0.17,
-        height: h * 0.010,
-      ),
-      Paint()..color = Color.lerp(theme, Colors.white, 0.6)!,
-    );
-
-    _paintCracks(canvas, w, h, pose);
   }
 
-  // ============================================================ 影刃刺客
-
-  /// 兜帽双刀客：瘦削的直立剪影，兜帽下只亮一只眼，身侧两道刀光，
-  /// 肩后的飘带一直在动——静止时也在"猎"。
-  static void _paintAssassin(
+  /// 圣女头顶的光环。
+  static void _paintHalo(
     Canvas canvas,
     double w,
     double h,
@@ -676,112 +1775,43 @@ class EnemyArt {
     Color theme,
     EnemyPose pose,
   ) {
-    // 肩后飘带：两条细长的丝带。
-    for (var i = 0; i < 2; i++) {
-      final side = i == 0 ? -1.0 : 1.0;
-      final flutter = math.sin(t * 2.1 + i * 1.7) * w * 0.035;
-      _fill(
-        canvas,
-        Path()
-          ..moveTo(w * 0.06 * side, h * 0.30)
-          ..quadraticBezierTo(
-            w * 0.16 * side,
-            h * 0.38 + flutter,
-            w * 0.10 * side + flutter,
-            h * 0.58,
-          )
-          ..quadraticBezierTo(
-            w * 0.06 * side + flutter,
-            h * 0.62,
-            w * 0.03 * side + flutter * 0.5,
-            h * 0.58,
-          )
-          ..quadraticBezierTo(
-            w * 0.08 * side,
-            h * 0.42,
-            w * 0.02 * side,
-            h * 0.31,
-          )
-          ..close(),
-        theme,
-        pose,
-        0.55,
-        const Color(0xFF241640),
-        const Color(0xFF0C0618),
-      );
-    }
-
-    // 斗篷身形：比魔女窄得多，下摆开衩，透出"轻"。
-    final cloak = Path()
-      ..moveTo(-w * 0.10, h * 0.28)
-      ..quadraticBezierTo(-w * 0.20, h * 0.45, -w * 0.17, h * 0.66)
-      ..quadraticBezierTo(-w * 0.15, h * 0.84, -w * 0.08, h * 0.92)
-      // 开衩
-      ..lineTo(-w * 0.035, h * 0.80)
-      ..lineTo(0, h * 0.93)
-      ..lineTo(w * 0.035, h * 0.80)
-      ..lineTo(w * 0.08, h * 0.92)
-      ..quadraticBezierTo(w * 0.15, h * 0.84, w * 0.17, h * 0.66)
-      ..quadraticBezierTo(w * 0.20, h * 0.45, w * 0.10, h * 0.28)
-      ..quadraticBezierTo(0, h * 0.245, -w * 0.10, h * 0.28)
-      ..close();
-    _fill(
-      canvas,
-      cloak,
-      theme,
-      pose,
-      1.0,
-      const Color(0xFF2E2150),
-      const Color(0xFF0E0820),
-    );
-
-    // 兜帽头：上尖的帽形，帽檐里是纯黑的空洞。
-    final hood = Path()
-      ..moveTo(0, h * 0.075)
-      ..quadraticBezierTo(w * 0.12, h * 0.115, w * 0.105, h * 0.235)
-      ..quadraticBezierTo(w * 0.06, h * 0.27, 0, h * 0.268)
-      ..quadraticBezierTo(-w * 0.06, h * 0.27, -w * 0.105, h * 0.235)
-      ..quadraticBezierTo(-w * 0.12, h * 0.115, 0, h * 0.075)
-      ..close();
-    _fill(
-      canvas,
-      hood,
-      theme,
-      pose,
-      0.95,
-      const Color(0xFF241840),
-      const Color(0xFF0A0518),
-    );
-    // 帽内阴影
-    canvas.drawOval(
-      Rect.fromCenter(
-        center: Offset(0, h * 0.215),
-        width: w * 0.145,
-        height: h * 0.075,
-      ),
-      Paint()..color = const Color(0xFF050310).withValues(alpha: 0.9),
-    );
-
-    // 一只眼：刺客的凝视。另一只眼永远藏在阴影里。
-    final blink = math.sin(t * 0.85) > 0.965 ? 0.12 : 1.0;
-    final eye = Offset(w * 0.030, h * 0.212);
-    // 亮度上限 1.0：相位与狂暴叠加后原本会算出 1.5 这种越界的 alpha。
-    final eyeGlow = (0.8 + pose.phase * 0.1 + (pose.enraged ? 0.3 : 0.0)).clamp(
-      0.0,
-      1.0,
-    );
-    canvas.drawOval(
-      Rect.fromCenter(center: eye, width: w * 0.040, height: h * 0.020 * blink),
+    final c = Offset(0, h * 0.075);
+    final r = w * 0.105;
+    canvas.save();
+    canvas.translate(c.dx, c.dy);
+    canvas.scale(1.0, 0.30);
+    canvas.drawCircle(
+      Offset.zero,
+      r,
       Paint()
-        ..color = theme.withValues(alpha: eyeGlow)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.014
+        ..color = Color.lerp(theme, Colors.white, 0.4)!
+            .withValues(alpha: 0.75 * (1 - pose.dissolve))
         ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.012),
     );
-    canvas.drawOval(
-      Rect.fromCenter(center: eye, width: w * 0.024, height: h * 0.012 * blink),
-      Paint()..color = Colors.white.withValues(alpha: 0.95),
+    canvas.restore();
+    final pulse = 0.5 + 0.2 * math.sin(t * 2.0);
+    canvas.drawCircle(
+      c,
+      r * 1.15,
+      Paint()
+        ..shader = ui.Gradient.radial(c, r * 1.4, [
+          Colors.white.withValues(alpha: 0.10 * pulse * (1 - pose.dissolve)),
+          Colors.transparent,
+        ]),
     );
+  }
 
-    // 双刀：两道从肩侧斜向下方的刃光。
+  /// 忍者的双刀：两道从肩侧斜向下方的刃光。
+  static void _paintTwinBlades(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
     for (final side in [-1.0, 1.0]) {
       final shiver = math.sin(t * 3.4 + (side > 0 ? 0.7 : 0)) * h * 0.006;
       final tip = Offset(w * 0.30 * side, h * (0.60 + shiver / h));
@@ -796,11 +1826,10 @@ class EnemyArt {
         blade,
         Paint()
           ..shader = ui.Gradient.linear(hilt, tip, [
-            const Color(0xFFC9B8E8).withValues(alpha: 0.9),
+            const Color(0xFFD8D0E8).withValues(alpha: 0.9),
             Color.lerp(theme, Colors.white, 0.5)!.withValues(alpha: 0.55),
           ]),
       );
-      // 刀柄
       canvas.drawLine(
         hilt.translate(-w * 0.02 * side, -h * 0.02),
         hilt,
@@ -810,14 +1839,10 @@ class EnemyArt {
           ..color = const Color(0xFF3A2C5C),
       );
     }
-    _paintCracks(canvas, w, h, pose);
   }
 
-  // ============================================================ 终焉之影
-
-  /// 弯角魔王：几乎占满画布的巨大斗篷剪影，一对向内弯的月牙角，
-  /// 胸口是一个缓缓旋转的吞噬漩涡——它"吃掉"的东西都进了那里。
-  static void _paintWarlord(
+  /// 魔女的宽檐帽：斜戴在头顶。
+  static void _paintWitchHat(
     Canvas canvas,
     double w,
     double h,
@@ -825,128 +1850,426 @@ class EnemyArt {
     Color theme,
     EnemyPose pose,
   ) {
-    // 身后的碎星：几颗绕着它转的光点，衬托"吞噬一切"的体量。
-    for (var i = 0; i < 7; i++) {
-      final a = t * (0.22 + 0.03 * i) + i * 0.9;
-      final rr = w * (0.42 + 0.04 * (i % 3));
-      final p = Offset(
-        rr * math.cos(a),
-        h * 0.42 + h * 0.16 * math.sin(a * 1.4),
-      );
-      canvas.drawCircle(
-        p,
-        w * (0.005 + 0.003 * (i % 2)),
-        Paint()
-          ..color = Colors.white.withValues(alpha: 0.35 * (1 - pose.dissolve)),
-      );
-    }
-
-    // 巨大斗篷：下缘三段波浪，比其他角色的裙摆宽一倍。
-    final cape = Path()
-      ..moveTo(-w * 0.13, h * 0.24)
-      ..quadraticBezierTo(-w * 0.34, h * 0.36, -w * 0.42, h * 0.60)
-      ..quadraticBezierTo(-w * 0.46, h * 0.78, -w * 0.40, h * 0.94)
-      // 下缘波浪
-      ..quadraticBezierTo(-w * 0.28, h * 0.885, -w * 0.17, h * 0.93)
-      ..quadraticBezierTo(-w * 0.06, h * 0.88, 0, h * 0.945)
-      ..quadraticBezierTo(w * 0.06, h * 0.88, w * 0.17, h * 0.93)
-      ..quadraticBezierTo(w * 0.28, h * 0.885, w * 0.40, h * 0.94)
-      ..quadraticBezierTo(w * 0.46, h * 0.78, w * 0.42, h * 0.60)
-      ..quadraticBezierTo(w * 0.34, h * 0.36, w * 0.13, h * 0.24)
-      ..quadraticBezierTo(0, h * 0.20, -w * 0.13, h * 0.24)
+    final sway = math.sin(t * 1.2) * w * 0.008;
+    // 宽檐
+    final brim = Path()
+      ..moveTo(-w * 0.24, h * 0.115 + sway)
+      ..quadraticBezierTo(0, h * 0.155, w * 0.24, h * 0.115 + sway)
+      ..quadraticBezierTo(w * 0.10, h * 0.085, 0, h * 0.098)
+      ..quadraticBezierTo(-w * 0.10, h * 0.085, -w * 0.24, h * 0.115 + sway)
       ..close();
-    _fill(
-      canvas,
-      cape,
-      theme,
-      pose,
-      1.0,
-      const Color(0xFF3A1A55),
-      const Color(0xFF0A0414),
-    );
-
-    // 斗篷内侧：比外层更深的内衬，拉开层次。
-    final inner = Path()
-      ..moveTo(-w * 0.10, h * 0.27)
-      ..quadraticBezierTo(-w * 0.22, h * 0.45, -w * 0.20, h * 0.78)
-      ..quadraticBezierTo(0, h * 0.86, w * 0.20, h * 0.78)
-      ..quadraticBezierTo(w * 0.22, h * 0.45, w * 0.10, h * 0.27)
+    // 帽身：向后弯的尖锥
+    final cone = Path()
+      ..moveTo(-w * 0.105, h * 0.105)
+      ..quadraticBezierTo(-w * 0.10, h * 0.02, -w * 0.02, h * 0.0)
+      ..quadraticBezierTo(w * 0.10, h * 0.045, w * 0.105, h * 0.105)
       ..close();
+    _fill(canvas, cone, theme, pose, 0.98, const Color(0xFF4A1A2A),
+        const Color(0xFF180810));
     canvas.drawPath(
-      inner,
-      Paint()..color = const Color(0xFF080310).withValues(alpha: 0.65),
+      brim,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, h * 0.08),
+          Offset(0, h * 0.16),
+          [
+            const Color(0xFF5A2236),
+            const Color(0xFF1A0A12),
+          ],
+        ),
     );
-
-    // 头部：低伏的暗影，几乎融进斗篷，只露出轮廓。
-    final head = Path()
-      ..moveTo(-w * 0.105, h * 0.245)
-      ..quadraticBezierTo(-w * 0.115, h * 0.13, 0, h * 0.105)
-      ..quadraticBezierTo(w * 0.115, h * 0.13, w * 0.105, h * 0.245)
-      ..close();
-    _fill(
-      canvas,
-      head,
-      theme,
-      pose,
-      0.95,
-      const Color(0xFF2A1040),
-      const Color(0xFF0A0414),
+    // 帽带与扣
+    canvas.drawLine(
+      Offset(-w * 0.095, h * 0.098),
+      Offset(w * 0.095, h * 0.098),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = w * 0.016
+        ..color = theme.withValues(alpha: 0.8 * (1 - pose.dissolve)),
     );
+    canvas.drawCircle(
+      Offset(w * 0.02, h * 0.098),
+      w * 0.014,
+      Paint()..color = theme.withValues(alpha: 0.9 * (1 - pose.dissolve)),
+    );
+  }
 
-    // 月牙双角：从头顶两侧向内弯——终焉的标志。
+  /// 月祭司的纸垂与祭灯。
+  static void _paintShrineRibbons(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
     for (final side in [-1.0, 1.0]) {
-      final sway = math.sin(t * 1.1) * w * 0.004;
-      _fill(
-        canvas,
-        Path()
-          ..moveTo(w * 0.075 * side, h * 0.135)
-          ..quadraticBezierTo(
-            w * 0.22 * side,
-            h * 0.10,
-            w * 0.16 * side + sway,
-            h * 0.028,
-          )
-          ..quadraticBezierTo(
-            w * 0.14 * side + sway,
-            h * 0.055,
-            w * 0.09 * side,
-            h * 0.088,
-          )
-          ..quadraticBezierTo(
-            w * 0.055 * side,
-            h * 0.115,
-            w * 0.075 * side,
-            h * 0.135,
-          )
-          ..close(),
-        theme,
-        pose,
-        0.9,
-        const Color(0xFF44206A),
-        const Color(0xFF120720),
-      );
-    }
-
-    // 三只眼：横排的细长发光缝，狂暴时更亮。
-    final blink = math.sin(t * 0.85) > 0.965 ? 0.12 : 1.0;
-    final eyeGlow = (0.75 + pose.phase * 0.12 + (pose.enraged ? 0.4 : 0.0))
-        .clamp(0.0, 1.0);
-    for (final dx in [-0.055, 0.0, 0.055]) {
-      final p = Offset(w * dx, h * 0.175 + w * (dx.abs()) * 0.06);
-      final ew = dx == 0 ? w * 0.052 : w * 0.038;
-      canvas.drawRect(
-        Rect.fromCenter(center: p, width: ew, height: h * 0.014 * blink),
+      final flutter = math.sin(t * 2.0 + (side > 0 ? 1.4 : 0)) * w * 0.02;
+      final x = w * 0.145 * side;
+      final path = Path()
+        ..moveTo(x, h * 0.30)
+        ..quadraticBezierTo(
+          x + flutter * 0.6,
+          h * 0.44,
+          x + flutter,
+          h * 0.58,
+        )
+        ..lineTo(x + flutter * 0.8 + w * 0.022, h * 0.57)
+        ..quadraticBezierTo(
+          x + w * 0.018,
+          h * 0.42,
+          x + w * 0.020,
+          h * 0.30,
+        )
+        ..close();
+      canvas.drawPath(
+        path,
         Paint()
-          ..color = theme.withValues(alpha: eyeGlow)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.010),
-      );
-      canvas.drawRect(
-        Rect.fromCenter(center: p, width: ew * 0.55, height: h * 0.008 * blink),
-        Paint()..color = Colors.white.withValues(alpha: 0.96),
+          ..color = Colors.white.withValues(alpha: 0.75 * (1 - pose.dissolve)),
       );
     }
+  }
 
-    // 胸口吞噬漩涡：三层旋转的弧 + 中央暗核。
+  static void _paintLanterns(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (var i = 0; i < 2; i++) {
+      final side = i == 0 ? -1.0 : 1.0;
+      final bob = math.sin(t * 1.3 + i * 2.0) * h * 0.012;
+      final c = Offset(w * 0.33 * side, h * (0.42 + i * 0.06) + bob);
+      final s = w * 0.026;
+      canvas.drawCircle(
+        c,
+        s * 1.8,
+        Paint()
+          ..shader = ui.Gradient.radial(c, s * 1.8, [
+            theme.withValues(alpha: 0.35 * (1 - pose.dissolve)),
+            Colors.transparent,
+          ]),
+      );
+      canvas.drawPath(
+        Path()
+          ..moveTo(c.dx, c.dy - s * 1.2)
+          ..lineTo(c.dx + s, c.dy)
+          ..lineTo(c.dx, c.dy + s * 1.2)
+          ..lineTo(c.dx - s, c.dy)
+          ..close(),
+        Paint()..color = Color.lerp(theme, Colors.white, 0.3)!,
+      );
+      canvas.drawPath(
+        Path()
+          ..moveTo(c.dx, c.dy - s * 1.2)
+          ..lineTo(c.dx + s, c.dy)
+          ..lineTo(c.dx, c.dy + s * 1.2)
+          ..lineTo(c.dx - s, c.dy)
+          ..close(),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0
+          ..color = Colors.white.withValues(alpha: 0.5 * (1 - pose.dissolve)),
+      );
+    }
+  }
+
+  /// 人鱼的贝壳发饰。
+  static void _paintShellPin(
+    Canvas canvas,
+    double w,
+    double h,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final c = Offset(-w * 0.052, h * 0.135);
+    final s = w * 0.024;
+    canvas.drawPath(
+      Path()
+        ..moveTo(c.dx, c.dy + s)
+        ..quadraticBezierTo(c.dx - s, c.dy, c.dx, c.dy - s)
+        ..quadraticBezierTo(c.dx + s, c.dy, c.dx, c.dy + s)
+        ..close(),
+      Paint()..color = Color.lerp(theme, Colors.white, 0.35)!,
+    );
+    canvas.drawLine(
+      Offset(c.dx, c.dy + s),
+      Offset(c.dx, c.dy - s),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8
+        ..color = Colors.white.withValues(alpha: 0.6 * (1 - pose.dissolve)),
+    );
+  }
+
+  /// 冰姬头上的雪晶冠。
+  static void _paintIceCrown(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final glint = 0.55 + 0.25 * math.sin(t * 2.2);
+    for (var i = 0; i < 5; i++) {
+      final x = (i - 2) * w * 0.038;
+      final tipY = h * (0.115 - 0.035 * (1 - (i - 2).abs() / 2));
+      final path = Path()
+        ..moveTo(x - w * 0.014, h * 0.128)
+        ..lineTo(x, tipY)
+        ..lineTo(x + w * 0.014, h * 0.128)
+        ..close();
+      canvas.drawPath(
+        path,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            Offset(x, tipY),
+            Offset(x, h * 0.128),
+            [
+              Colors.white.withValues(alpha: glint * (1 - pose.dissolve)),
+              Color.lerp(theme, Colors.white, 0.3)!
+                  .withValues(alpha: 0.75 * (1 - pose.dissolve)),
+            ],
+          ),
+      );
+    }
+  }
+
+  /// 吸血鬼的悬浮酒杯：杯里的那口"收藏"。
+  static void _paintGoblet(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final c = Offset(w * 0.26, h * 0.56 + math.sin(t * 1.4) * h * 0.008);
+    final s = w * 0.030;
+    // 杯身
+    canvas.drawPath(
+      Path()
+        ..moveTo(c.dx - s, c.dy - s * 1.1)
+        ..quadraticBezierTo(c.dx - s * 0.9, c.dy + s * 0.5, c.dx, c.dy + s * 0.5)
+        ..quadraticBezierTo(c.dx + s * 0.9, c.dy + s * 0.5, c.dx + s, c.dy - s * 1.1)
+        ..close(),
+      Paint()
+        ..color = const Color(0xFF1A0A12).withValues(alpha: 0.9)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.8),
+    );
+    // 杯里的血
+    canvas.drawPath(
+      Path()
+        ..moveTo(c.dx - s * 0.82, c.dy - s * 0.72)
+        ..quadraticBezierTo(
+          c.dx - s * 0.72,
+          c.dy + s * 0.2,
+          c.dx,
+          c.dy + s * 0.28,
+        )
+        ..quadraticBezierTo(
+          c.dx + s * 0.72,
+          c.dy + s * 0.2,
+          c.dx + s * 0.82,
+          c.dy - s * 0.72,
+        )
+        ..close(),
+      Paint()..color = theme.withValues(alpha: 0.85 * (1 - pose.dissolve)),
+    );
+    // 杯柄与底座
+    canvas.drawLine(
+      Offset(c.dx, c.dy + s * 0.5),
+      Offset(c.dx, c.dy + s * 1.1),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..color = Colors.white.withValues(alpha: 0.4 * (1 - pose.dissolve)),
+    );
+    canvas.drawLine(
+      Offset(c.dx - s * 0.5, c.dy + s * 1.1),
+      Offset(c.dx + s * 0.5, c.dy + s * 1.1),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..color = Colors.white.withValues(alpha: 0.4 * (1 - pose.dissolve)),
+    );
+  }
+
+  /// 傀儡师手持的大剪刀。
+  static void _paintScissors(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final c = Offset(w * 0.17, h * 0.60);
+    final s = w * 0.055;
+    canvas.save();
+    canvas.translate(c.dx, c.dy);
+    canvas.rotate(0.5 + math.sin(t * 1.5) * 0.05);
+    // 两片刃
+    for (final side in [-1.0, 1.0]) {
+      final blade = Path()
+        ..moveTo(0, 0)
+        ..quadraticBezierTo(s * 0.5 * side, -s * 1.2, 0, -s * 2.1)
+        ..quadraticBezierTo(s * 0.12 * side, -s * 1.2, 0, 0)
+        ..close();
+      canvas.drawPath(
+        blade,
+        Paint()
+          ..shader = ui.Gradient.linear(
+            const Offset(0, 0),
+            Offset(0, -s * 2.1),
+            [
+              Colors.white.withValues(alpha: 0.85 * (1 - pose.dissolve)),
+              Color.lerp(theme, Colors.white, 0.5)!
+                  .withValues(alpha: 0.6 * (1 - pose.dissolve)),
+            ],
+          ),
+      );
+      // 指环
+      canvas.drawCircle(
+        Offset(s * 0.30 * side, s * 0.8),
+        s * 0.38,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = s * 0.2
+          ..color = theme.withValues(alpha: 0.8 * (1 - pose.dissolve)),
+      );
+    }
+    // 轴
+    canvas.drawCircle(
+      Offset.zero,
+      s * 0.12,
+      Paint()..color = Colors.white.withValues(alpha: 0.8 * (1 - pose.dissolve)),
+    );
+    canvas.restore();
+  }
+
+  /// 傀儡师的丝线：从指尖延向画布边缘的几道细弧。
+  static void _paintThreads(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final thread = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9
+      ..color = Colors.white.withValues(alpha: 0.30 * (1 - pose.dissolve));
+    for (var i = 0; i < 3; i++) {
+      final side = i == 1 ? 1.0 : -1.0;
+      final sway = math.sin(t * 1.6 + i * 1.9) * w * 0.015;
+      canvas.drawPath(
+        Path()
+          ..moveTo(w * 0.115 * side, h * 0.645)
+          ..quadraticBezierTo(
+            w * (0.30 + i * 0.06) * side + sway,
+            h * (0.70 + i * 0.03),
+            w * (0.52 + i * 0.10) * side,
+            h * (0.60 + i * 0.06) + sway,
+          ),
+        thread,
+      );
+    }
+  }
+
+  /// 巫姬额前的单边护目镜。
+  static void _paintVisor(
+    Canvas canvas,
+    double w,
+    double h,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    final band = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * 0.010
+      ..color = const Color(0xFF2A4440);
+    canvas.save();
+    canvas.translate(0, h * 0.150);
+    canvas.scale(1.0, 0.42);
+    canvas.drawCircle(Offset.zero, w * 0.072, band);
+    canvas.restore();
+    final lensC = Offset(-w * 0.048, h * 0.150);
+    canvas.drawCircle(
+      lensC,
+      w * 0.030,
+      Paint()
+        ..color = theme.withValues(alpha: 0.55 * (1 - pose.dissolve))
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.008),
+    );
+    canvas.drawCircle(
+      lensC,
+      w * 0.026,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..color = Colors.white.withValues(alpha: 0.7 * (1 - pose.dissolve)),
+    );
+    canvas.drawCircle(
+      lensC.translate(-w * 0.008, -w * 0.008),
+      w * 0.006,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.9 * (1 - pose.dissolve)),
+    );
+  }
+
+  /// 龙女的鳞肩甲：两片叠瓦状的鳞甲覆在肩头。
+  static void _paintScaleShoulders(
+    Canvas canvas,
+    double w,
+    double h,
+    Color theme,
+    EnemyPose pose,
+  ) {
+    for (final side in [-1.0, 1.0]) {
+      for (var row = 0; row < 2; row++) {
+        final y = h * (0.315 + row * 0.045);
+        final x0 = w * (0.10 + row * 0.01) * side;
+        final scale = Path()
+          ..moveTo(x0, y)
+          ..quadraticBezierTo(
+            w * (0.19 - row * 0.01) * side,
+            y - h * 0.05,
+            w * 0.24 * side,
+            y + h * 0.012,
+          )
+          ..quadraticBezierTo(w * 0.16 * side, y + h * 0.04, x0, y)
+          ..close();
+        canvas.drawPath(
+          scale,
+          Paint()
+            ..shader = ui.Gradient.linear(
+              Offset(x0, y - h * 0.05),
+              Offset(x0, y + h * 0.04),
+              [
+                Color.lerp(theme, Colors.white, 0.2)!
+                    .withValues(alpha: 0.8 * (1 - pose.dissolve)),
+                const Color(0xFF33140A).withValues(alpha: 0.9),
+              ],
+            ),
+        );
+      }
+    }
+  }
+
+  /// 观测者胸口的吞噬漩涡：三层旋转的弧 + 中央暗核。
+  static void _paintVortex(
+    Canvas canvas,
+    double w,
+    double h,
+    double t,
+    Color theme,
+    EnemyPose pose,
+  ) {
     final vortex = Offset(0, h * 0.44);
     final vr = w * 0.13;
     canvas.drawCircle(
@@ -982,7 +2305,6 @@ class EnemyArt {
       vr * 0.22,
       Paint()..color = const Color(0xFF03010A).withValues(alpha: 0.95),
     );
-    _paintCracks(canvas, w, h, pose);
   }
 
   // ------------------------------------------------------------ 氛围
@@ -1215,442 +2537,6 @@ class EnemyArt {
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1.6),
         );
       }
-    }
-  }
-
-  /// 躯干 + 头部 + 脖颈。
-  static Path _buildBody(double w, double h, double t, EnemyPose pose) {
-    final sway = math.sin(t * 1.1) * w * 0.010;
-    final hemWave = math.sin(t * 0.9) * h * 0.008;
-    final path = Path()
-      ..moveTo(-w * 0.108, h * _shoulderY)
-      ..quadraticBezierTo(-w * 0.100, h * _bustY, -w * 0.062, h * _waistY)
-      ..quadraticBezierTo(-w * 0.090, h * _hipY, -w * 0.230, h * 0.79)
-      ..quadraticBezierTo(-w * 0.286, h * 0.855, -w * 0.268, h * _hemY)
-      // 波浪裙摆
-      ..quadraticBezierTo(
-        -w * 0.150,
-        h * (0.862 + hemWave / h),
-        -w * 0.075,
-        h * 0.895,
-      )
-      ..quadraticBezierTo(
-        -w * 0.010 + sway,
-        h * (0.925 + hemWave / h),
-        w * 0.078,
-        h * 0.893,
-      )
-      ..quadraticBezierTo(
-        w * 0.155,
-        h * (0.860 - hemWave / h),
-        w * 0.268,
-        h * _hemY,
-      )
-      ..quadraticBezierTo(w * 0.286, h * 0.855, w * 0.230, h * 0.79)
-      ..quadraticBezierTo(w * 0.090, h * _hipY, w * 0.062, h * _waistY)
-      ..quadraticBezierTo(w * 0.100, h * _bustY, w * 0.108, h * _shoulderY)
-      // 肩线
-      ..quadraticBezierTo(w * 0.055, h * 0.297, 0, h * 0.301)
-      ..quadraticBezierTo(-w * 0.055, h * 0.297, -w * 0.108, h * _shoulderY)
-      ..close();
-
-    // 头部
-    path.addPath(
-      Path()..addOval(
-        Rect.fromCenter(
-          center: Offset(sway * 0.5, h * (_headTop + _eyeY) / 2 + h * 0.012),
-          width: w * 0.132,
-          height: h * 0.155,
-        ),
-      ),
-      Offset.zero,
-    );
-
-    // 脖颈
-    path.addPath(
-      Path()
-        ..moveTo(-w * 0.030, h * 0.255)
-        ..lineTo(w * 0.030, h * 0.255)
-        ..lineTo(w * 0.042, h * 0.315)
-        ..lineTo(-w * 0.042, h * 0.315)
-        ..close(),
-      Offset.zero,
-    );
-    return path;
-  }
-
-  /// 垂在身侧的双臂。
-  static Path _buildArms(double w, double h, double t, EnemyPose pose) {
-    final path = Path();
-    for (final side in [-1.0, 1.0]) {
-      final sway = math.sin(t * 1.3 + (side > 0 ? 1.2 : 0)) * w * 0.006;
-      // 上臂 + 小臂
-      path.addPath(
-        Path()
-          ..moveTo(w * 0.104 * side, h * 0.335)
-          ..quadraticBezierTo(
-            w * 0.163 * side,
-            h * 0.44,
-            w * 0.148 * side + sway,
-            h * 0.545,
-          )
-          ..quadraticBezierTo(
-            w * 0.142 * side + sway,
-            h * 0.60,
-            w * 0.126 * side + sway,
-            h * 0.635,
-          )
-          ..quadraticBezierTo(
-            w * 0.112 * side,
-            h * 0.60,
-            w * 0.104 * side,
-            h * 0.545,
-          )
-          ..quadraticBezierTo(
-            w * 0.106 * side,
-            h * 0.44,
-            w * 0.070 * side,
-            h * 0.352,
-          )
-          ..close(),
-        Offset.zero,
-      );
-      // 手
-      path.addPath(
-        Path()..addOval(
-          Rect.fromCenter(
-            center: Offset(w * 0.124 * side + sway, h * 0.652),
-            width: w * 0.032,
-            height: h * 0.028,
-          ),
-        ),
-        Offset.zero,
-      );
-    }
-    return path;
-  }
-
-  /// 身后的长发主体。
-  static Path _buildHair(
-    double w,
-    double h,
-    double t,
-    EnemyPose pose, {
-    required bool back,
-  }) {
-    final flutter = 0.010 + pose.phase * 0.004;
-    final path = Path();
-    final spread = back ? 1.0 : 0.66;
-    for (final side in [-1.0, 1.0]) {
-      final wave = math.sin(t * 1.5 + (side > 0 ? 0.9 : 0)) * h * flutter;
-      final wave2 = math.sin(t * 1.05 + (side > 0 ? 2.1 : 1.3)) * h * flutter;
-      final wave3 = math.sin(t * 1.8 + side) * h * flutter * 0.7;
-      path.addPath(
-        Path()
-          ..moveTo(w * 0.046 * side, h * 0.115)
-          ..quadraticBezierTo(
-            w * 0.140 * side * spread,
-            h * 0.20 + wave,
-            w * 0.150 * side * spread,
-            h * 0.44 + wave2,
-          )
-          ..quadraticBezierTo(
-            w * 0.140 * side * spread,
-            h * 0.62 + wave,
-            w * 0.104 * side * spread,
-            h * 0.80 + wave2 * 1.6,
-          )
-          ..quadraticBezierTo(
-            w * 0.126 * side * spread,
-            h * 0.58 + wave3,
-            w * 0.112 * side * spread,
-            h * 0.38 + wave3,
-          )
-          ..quadraticBezierTo(
-            w * 0.098 * side * spread,
-            h * 0.21 + wave3,
-            w * 0.016 * side,
-            h * 0.145,
-          )
-          ..close(),
-        Offset.zero,
-      );
-    }
-    return path;
-  }
-
-  /// 贴着脸颊的刘海，让头部有层次。
-  static Path _buildFrontHair(double w, double h, double t, EnemyPose pose) {
-    final sway = math.sin(t * 1.4) * w * 0.005;
-    final path = Path();
-    for (final side in [-1.0, 1.0]) {
-      path.addPath(
-        Path()
-          ..moveTo(w * 0.012 * side, h * 0.115)
-          ..quadraticBezierTo(
-            w * 0.092 * side,
-            h * 0.155,
-            w * 0.108 * side + sway,
-            h * 0.27,
-          )
-          ..quadraticBezierTo(
-            w * 0.088 * side + sway,
-            h * 0.40,
-            w * 0.052 * side + sway,
-            h * 0.50,
-          )
-          ..quadraticBezierTo(
-            w * 0.070 * side,
-            h * 0.36,
-            w * 0.056 * side,
-            h * 0.26,
-          )
-          ..quadraticBezierTo(
-            w * 0.040 * side,
-            h * 0.17,
-            w * 0.004 * side,
-            h * 0.145,
-          )
-          ..close(),
-        Offset.zero,
-      );
-    }
-    // 头顶发盖
-    path.addPath(
-      Path()..addOval(
-        Rect.fromCenter(
-          center: Offset(0, h * 0.152),
-          width: w * 0.152,
-          height: h * 0.088,
-        ),
-      ),
-      Offset.zero,
-    );
-    return path;
-  }
-
-  static Path _buildHorns(double w, double h, double t) {
-    final sway = math.sin(t * 1.3) * w * 0.005;
-    final path = Path();
-    for (final side in [-1.0, 1.0]) {
-      path.addPath(
-        Path()
-          ..moveTo(w * 0.030 * side, h * 0.150)
-          ..quadraticBezierTo(
-            w * 0.090 * side,
-            h * 0.112,
-            w * 0.104 * side + sway,
-            h * _hornTip,
-          )
-          ..quadraticBezierTo(
-            w * 0.082 * side,
-            h * 0.106,
-            w * 0.062 * side,
-            h * 0.142,
-          )
-          ..close(),
-        Offset.zero,
-      );
-    }
-    return path;
-  }
-
-  /// 裙装的明暗与衣褶：让深色剪影内部有可读的结构。
-  static void _paintDressShading(
-    Canvas canvas,
-    double w,
-    double h,
-    Color theme,
-    EnemyPose pose,
-  ) {
-    final hem = h * _hemY;
-    // 胸口到腰的高光
-    final highlight = Path()
-      ..moveTo(-w * 0.086, h * (_bustY - 0.03))
-      ..quadraticBezierTo(
-        -w * 0.040,
-        h * _waistY,
-        -w * 0.072,
-        h * (_hipY + 0.03),
-      )
-      ..quadraticBezierTo(0, h * 0.655, w * 0.072, h * (_hipY + 0.03))
-      ..quadraticBezierTo(
-        w * 0.040,
-        h * _waistY,
-        w * 0.086,
-        h * (_bustY - 0.03),
-      )
-      ..quadraticBezierTo(
-        0,
-        h * (_bustY - 0.065),
-        -w * 0.086,
-        h * (_bustY - 0.03),
-      )
-      ..close();
-    canvas.drawPath(
-      highlight,
-      Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(0, h * _bustY),
-          Offset(0, h * _hipY),
-          [
-            Colors.white.withValues(alpha: 0.12),
-            Colors.white.withValues(alpha: 0.0),
-          ],
-        ),
-    );
-
-    // 裙摆衣褶
-    final fold = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
-      ..color = Colors.white.withValues(alpha: 0.10);
-    for (final offset in [-0.14, -0.06, 0.05, 0.13]) {
-      final path = Path()
-        ..moveTo(w * offset * 0.55, h * (_hipY + 0.02))
-        ..quadraticBezierTo(
-          w * offset,
-          h * 0.74,
-          w * offset * 1.75,
-          hem - h * 0.012,
-        );
-      canvas.drawPath(path, fold);
-    }
-
-    // 裙摆下缘的轮廓提亮
-    canvas.drawPath(
-      Path()
-        ..moveTo(-w * 0.268, hem)
-        ..quadraticBezierTo(-w * 0.150, h * 0.862, -w * 0.075, h * 0.895)
-        ..quadraticBezierTo(0, h * 0.925, w * 0.078, h * 0.893)
-        ..quadraticBezierTo(w * 0.155, h * 0.860, w * 0.268, hem),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.6
-        ..strokeCap = StrokeCap.round
-        ..color = theme.withValues(alpha: 0.55 * (1 - pose.dissolve)),
-    );
-
-    // 肩颈处的主题色披肩，强调上半身结构
-    final collar = Path()
-      ..moveTo(-w * 0.108, h * _shoulderY)
-      ..quadraticBezierTo(0, h * 0.288, w * 0.108, h * _shoulderY)
-      ..quadraticBezierTo(w * 0.060, h * 0.352, 0, h * 0.358)
-      ..quadraticBezierTo(-w * 0.060, h * 0.352, -w * 0.108, h * _shoulderY)
-      ..close();
-    canvas.drawPath(
-      collar,
-      Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(0, h * 0.29),
-          Offset(0, h * 0.36),
-          [theme.withValues(alpha: 0.55), theme.withValues(alpha: 0.05)],
-        ),
-    );
-  }
-
-  /// 胸口的契约宝石，随相位变亮。
-  static void _paintChestGem(
-    Canvas canvas,
-    double w,
-    double h,
-    Color theme,
-    EnemyPose pose,
-  ) {
-    final glow = 0.5 + pose.phase * 0.14 + (pose.enraged ? 0.3 : 0.0);
-    final center = Offset(0, h * 0.415);
-    final s = w * 0.022;
-    final gem = Path()
-      ..moveTo(center.dx, center.dy - s * 1.4)
-      ..lineTo(center.dx + s, center.dy)
-      ..lineTo(center.dx, center.dy + s * 1.4)
-      ..lineTo(center.dx - s, center.dy)
-      ..close();
-    canvas.drawPath(
-      gem,
-      Paint()
-        ..color = theme.withValues(alpha: glow * 0.6)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.02),
-    );
-    canvas.drawPath(
-      gem,
-      Paint()..color = Color.lerp(theme, Colors.white, 0.55)!,
-    );
-  }
-
-  /// 面部：一张浅色的「脸」，配合发光的眼睛。
-  static void _paintFace(
-    Canvas canvas,
-    double w,
-    double h,
-    Color theme,
-    EnemyPose pose,
-    double t,
-  ) {
-    // 与 _buildBody 中头部椭圆的圆心保持一致
-    final faceCenter = Offset(0, h * 0.177);
-    final faceRect = Rect.fromCenter(
-      center: faceCenter,
-      width: w * 0.120,
-      height: h * 0.132,
-    );
-    canvas.drawOval(
-      faceRect,
-      Paint()
-        ..shader = ui.Gradient.linear(
-          faceRect.topCenter,
-          faceRect.bottomCenter,
-          const [Color(0xFFFBEFF4), Color(0xFFE0C2D4), Color(0xFFA9859F)],
-          const [0.0, 0.45, 1.0],
-        ),
-    );
-
-    final blink = math.sin(t * 0.85) > 0.965 ? 0.12 : 1.0;
-    final glow = (0.65 + pose.phase * 0.12 + (pose.enraged ? 0.4 : 0.0)).clamp(
-      0.0,
-      1.0,
-    );
-    for (final side in [-1.0, 1.0]) {
-      final p = Offset(w * 0.032 * side, h * _eyeY);
-      canvas.drawOval(
-        Rect.fromCenter(center: p, width: w * 0.046, height: h * 0.024 * blink),
-        Paint()
-          ..color = theme.withValues(alpha: glow)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.014),
-      );
-      canvas.drawOval(
-        Rect.fromCenter(center: p, width: w * 0.032, height: h * 0.017 * blink),
-        Paint()..color = Colors.white.withValues(alpha: 0.98),
-      );
-      canvas.drawOval(
-        Rect.fromCenter(center: p, width: w * 0.012, height: h * 0.010 * blink),
-        Paint()..color = theme,
-      );
-    }
-  }
-
-  static void _paintCracks(Canvas canvas, double w, double h, EnemyPose pose) {
-    if (pose.phase <= 0) return;
-    final alpha = (0.22 + pose.phase * 0.2).clamp(0.0, 0.95);
-    final rng = math.Random(97 + pose.phase);
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.1
-      ..color = const Color(0xFFFFE9F2).withValues(alpha: alpha);
-    for (var i = 0; i < pose.phase * 3; i++) {
-      var p = Offset(
-        (rng.nextDouble() - 0.5) * w * 0.34,
-        h * (0.34 + rng.nextDouble() * 0.42),
-      );
-      final path = Path()..moveTo(p.dx, p.dy);
-      for (var k = 0; k < 3; k++) {
-        p += Offset(
-          (rng.nextDouble() - 0.5) * w * 0.06,
-          rng.nextDouble() * h * 0.045,
-        );
-        path.lineTo(p.dx, p.dy);
-      }
-      canvas.drawPath(path, paint);
     }
   }
 }
