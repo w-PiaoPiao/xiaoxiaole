@@ -132,8 +132,9 @@ void main() {
     });
 
     test('战役模式（不开肉鸽层）只发普通牌', () {
-      // 质变与代价是无尽模式的风景：战役一共只有五次选择，把血契这类
-      // 代价牌混进去只会把线性成长搅乱。
+      // 质变与代价是无尽模式的风景：战役把三选一留给纯线性成长，
+      // 把血契这类代价牌混进去只会搅乱这条线（是否开放肉鸽层是独立的
+      // 数值决策，见 UpgradePool.roll 的注释）。
       for (var seed = 0; seed < 40; seed++) {
         final offered = UpgradePool.roll(
           profile: Campaign.player,
@@ -152,13 +153,14 @@ void main() {
   group('强化在战斗里生效', () {
     final def = Campaign.levels[0].enemy;
 
-    BattleState battleWith(Map<String, int> taken, {int? hp}) => BattleState(
-      def: def,
-      levelIndex: 0,
-      profile: profileWith(taken),
-      playerHp: hp,
-      rng: math.Random(1),
-    );
+    BattleState battleWith(Map<String, int> taken, {int? hp, math.Random? rng}) =>
+        BattleState(
+          def: def,
+          levelIndex: 0,
+          profile: profileWith(taken),
+          playerHp: hp,
+          rng: rng ?? math.Random(1),
+        );
 
     test('烈焰精通提高红宝石伤害', () {
       final state = battleWith(const {'blade': 2});
@@ -168,14 +170,27 @@ void main() {
     });
 
     test('暴击按倍率放大伤害', () {
-      // critChance 拉满 → 必定暴击，结果是确定的。
-      final state = battleWith(const {'crit': 20});
-      final events = state.applyClear({GemType.red: 3}, combo: 1);
-      expect(events.any((e) => e.kind == CombatEventKind.crit), isTrue);
+      // critChance 高到 clamp 上限（0.8）：多种子循环直到看到暴击——
+      // 别靠固定种子的首抽蒙对（rng 消耗顺序一变就会翻车）。
+      var sawCrit = false;
+      var dealt = 0;
+      for (var seed = 1; seed <= 20 && !sawCrit; seed++) {
+        final state = battleWith(const {'crit': 20}, rng: math.Random(seed));
+        final events = state.applyClear({GemType.red: 3}, combo: 1);
+        if (events.any((e) => e.kind == CombatEventKind.crit)) {
+          sawCrit = true;
+          dealt = def.maxHp - state.enemyHp;
+        }
+      }
+      expect(
+        sawCrit,
+        isTrue,
+        reason: '0.8 的暴击率 20 个种子一次都没出，概率上不可能',
+      );
       final expected =
-          (3 * Campaign.player.redDamage * state.profile.critMultiplier)
+          (3 * Campaign.player.redDamage * Campaign.player.critMultiplier)
               .round();
-      expect(def.maxHp - state.enemyHp, expected);
+      expect(dealt, expected);
     });
 
     test('没有暴击强化时永远不暴击', () {

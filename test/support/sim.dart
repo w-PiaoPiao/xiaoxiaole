@@ -8,11 +8,15 @@
 /// 比玩家真正面对的世界简单——机关带来的难度回归它抓不到。口径统一到
 /// 这里之后，改一处两边都跟着变。
 ///
-/// 与 `GameScreen` 对齐的三条：
+/// 与 `GameScreen` 对齐的五条：
 ///   1. 开局按关卡配置摆机关（`placeObstacles`）；
 ///   2. 进敌方回合前同步毒藤数量（`vineCount`）；
 ///   3. 玩家的棋盘规则（棱镜宗师 / 爆破工程 / 十字破空）注入 `resolveSwap`
-///      与 `resolveUltimate`。
+///      与 `resolveUltimate`；
+///   4. **必杀独占一回合**（选了斩月就不能再交换，敌方倒计时照常推进），
+///      且破除祭坛立刻补怒气（`altarRageReward`）；
+///   5. 过关血量继承先用**旧档案** maxHp 算 50% 保底 + 25% 回补，吃牌后
+///      把上限增量当场补满（`_takeUpgrade` 的 grown 补偿）。
 library;
 
 import 'dart:math' as math;
@@ -125,7 +129,52 @@ class SimResult {
   });
 }
 
+/// 结算一步清除：伤害 + 祭坛怒气。交换与必杀两条路径共用，
+/// 保证祭坛奖励不会被任何一条路径漏掉。
+void _settleStep(
+  BattleState battle,
+  CascadeStep step,
+  double multiplier, {
+  void Function(CombatEvent event)? onEvent,
+  void Function(CascadeStep step)? onStep,
+}) {
+  onStep?.call(step);
+  for (final e in battle.applyClear(
+    step.counts,
+    combo: step.combo,
+    specialBonus: step.specialBonus,
+    multiplier: multiplier,
+  )) {
+    onEvent?.call(e);
+  }
+  // 祭坛：破一座补一口怒气——GameScreen 的连锁结算就是这么做的。
+  // 漏掉它的话，带祭坛的关卡（战役 5 关、无尽 wave≥6 的 3 的倍数波）
+  // 会系统性少放必杀，难度被高估。
+  for (final brk in step.obstacleBreaks) {
+    if (brk.kind == ObstacleKind.altar) {
+      battle.grantRage(BattleState.altarRageReward);
+    }
+  }
+}
+
+/// 回合收尾：同步毒藤 → 推进敌方回合。与 GameScreen 的 `_finishTurn` 同一口径。
+void _finishSimTurn(
+  BattleState battle,
+  BoardEngine board, {
+  void Function(CombatEvent event)? onEvent,
+}) {
+  // 毒藤每一株都在给敌人加码：进敌方回合前同步一次数量。
+  battle.vineCount = board.countObstacles(ObstacleKind.vine);
+  for (final e in battle.endPlayerTurn()) {
+    onEvent?.call(e);
+  }
+}
+
 /// 用落子顾问完整推演一场战斗（一关或一波）。
+///
+/// [onEvent] / [onStep] 是可选的观测口：`tool/diag_balance.dart` 靠它们
+/// 拿到逐事件的收支台账，而不必自己复制一条推演循环（复制版本曾与这里
+/// 漂移——测试那份漏了机关，"守卫守住的世界"比玩家面对的简单）。
 SimResult fight(
   LevelDef level, {
   required int seed,
@@ -133,6 +182,8 @@ SimResult fight(
   int? playerHp,
   FightStyle fightStyle = FightStyle.balanced,
   int maxTurns = 400,
+  void Function(CombatEvent event)? onEvent,
+  void Function(CascadeStep step)? onStep,
 }) {
   final board = BoardEngine(seed: seed)..reset();
   for (final entry in level.obstacles.entries) {
@@ -152,8 +203,35 @@ SimResult fight(
   var minHp = battle.playerHp;
 
   while (!battle.isOver && turns < maxTurns) {
+    // 必杀独占一回合：与 GameScreen 一致，选了斩月就不能再交换——
+    // 施放本身就是一次行动，敌方倒计时照常推进。让必杀免费搭在交换
+    // 回合上的话，推演玩家的 DPS 会系统性偏高，所有校准窗口全部失真。
+    if (battle.canCastUltimate) {
+      for (final e in battle.castUltimate()) {
+        onEvent?.call(e);
+      }
+      for (final step in board.resolveUltimate(
+        board.index(BoardEngine.cols ~/ 2, BoardEngine.rows ~/ 2),
+        rules: profile.boardRules,
+      )) {
+        _settleStep(
+          battle,
+          step,
+          profile.ultimateMultiplier,
+          onEvent: onEvent,
+          onStep: onStep,
+        );
+      }
+      _finishSimTurn(battle, board, onEvent: onEvent);
+      // 每回合的血量低点只可能出现在敌方行动之后，这里取一次就够。
+      if (battle.playerHp < minHp) minHp = battle.playerHp;
+      turns++;
+      continue;
+    }
     final move = advisor.suggest(board, battle);
     if (move == null) {
+      // 与真实游戏对齐：无解重排发生在上一回合末（敌方已行动过），
+      // 洗牌本身不消耗玩家回合——洗完继续找步，不推进敌方。
       board.shuffleBoard();
       turns++;
       continue;
@@ -164,29 +242,9 @@ SimResult fight(
       move.b,
       rules: profile.boardRules,
     )) {
-      battle.applyClear(
-        step.counts,
-        combo: step.combo,
-        specialBonus: step.specialBonus,
-      );
+      _settleStep(battle, step, 1.0, onEvent: onEvent, onStep: onStep);
     }
-    if (battle.canCastUltimate) {
-      battle.castUltimate();
-      for (final step in board.resolveUltimate(
-        board.index(BoardEngine.cols ~/ 2, BoardEngine.rows ~/ 2),
-        rules: profile.boardRules,
-      )) {
-        battle.applyClear(
-          step.counts,
-          combo: step.combo,
-          specialBonus: step.specialBonus,
-          multiplier: profile.ultimateMultiplier,
-        );
-      }
-    }
-    // 毒藤每一株都在给敌人加码：与 GameScreen 同一口径（进敌方回合前同步）。
-    battle.vineCount = board.countObstacles(ObstacleKind.vine);
-    battle.endPlayerTurn();
+    _finishSimTurn(battle, board, onEvent: onEvent);
     // 每回合的血量低点只可能出现在敌方行动之后，这里取一次就够。
     if (battle.playerHp < minHp) minHp = battle.playerHp;
     turns++;
@@ -271,19 +329,29 @@ CampaignResult playCampaign({
     }
 
     // 过关奖励：抽三张、按策略吃一张（战役模式不启用稀有度分层）。
-    final offer = UpgradePool.roll(profile: profile, taken: taken, rng: rng);
-    if (offer.isNotEmpty) {
-      final choice = offer[pickIndex(style, offer)];
-      profile = choice.apply(profile);
-      taken[choice.id] = (taken[choice.id] ?? 0) + 1;
-    }
-    carryHp = math.min(
+    // 血量继承与 GameScreen 同口径：先按**旧档案**的 maxHp 算「50% 保底 +
+    // 25% 回补」（`_handleBattleEnd`），吃牌后再把上限增量当场补满
+    // （`_takeUpgrade` 的 grown 补偿）。先 apply 再按新档案整体重算的话，
+    // 拿生命上限牌的 build（山岳之躯/生命洪流）会被少算约 0.75×增量，
+    // 保命流被系统性低估。
+    final carried = math.min(
       profile.maxHp,
       math.max(
         (profile.maxHp * 0.5).round(),
         result.playerHp + (profile.maxHp * 0.25).round(),
       ),
     );
+    final offer = UpgradePool.roll(profile: profile, taken: taken, rng: rng);
+    if (offer.isNotEmpty) {
+      final before = profile;
+      final choice = offer[pickIndex(style, offer)];
+      profile = choice.apply(profile);
+      taken[choice.id] = (taken[choice.id] ?? 0) + 1;
+      final grown = profile.maxHp - before.maxHp;
+      carryHp = (carried + math.max(0, grown)).clamp(1, profile.maxHp).toInt();
+    } else {
+      carryHp = carried;
+    }
   }
   return CampaignResult(
     cleared: true,
@@ -352,6 +420,15 @@ EndlessResult playEndless({
       );
     }
 
+    // 血量继承与 GameScreen 同口径（旧档案算保底 → 吃牌 → grown 补满），
+    // 详见 [playCampaign] 内的说明。
+    final carried = math.min(
+      profile.maxHp,
+      math.max(
+        (profile.maxHp * 0.5).round(),
+        result.playerHp + (profile.maxHp * 0.25).round(),
+      ),
+    );
     final offer = UpgradePool.roll(
       profile: profile,
       taken: taken,
@@ -360,17 +437,15 @@ EndlessResult playEndless({
       roguelike: true,
     );
     if (offer.isNotEmpty) {
+      final before = profile;
       final choice = offer[pickIndex(style, offer)];
       profile = choice.apply(profile);
       taken[choice.id] = (taken[choice.id] ?? 0) + 1;
+      final grown = profile.maxHp - before.maxHp;
+      carryHp = (carried + math.max(0, grown)).clamp(1, profile.maxHp).toInt();
+    } else {
+      carryHp = carried;
     }
-    carryHp = math.min(
-      profile.maxHp,
-      math.max(
-        (profile.maxHp * 0.5).round(),
-        result.playerHp + (profile.maxHp * 0.25).round(),
-      ),
-    );
   }
   return EndlessResult(fallenWave: maxWave + 1, taken: taken, profile: profile);
 }

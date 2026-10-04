@@ -200,4 +200,32 @@ void main() {
     await advance(tester, 0.5);
     expect(find.text('回到第一关'), findsOneWidget);
   });
+
+  testWidgets('瞄准必杀时点洗牌：瞄准态被收掉，随后点棋盘不会误放必杀', (tester) async {
+    final settings = AppSettings();
+    await settings.load();
+    final battle = await pumpRun(tester, settings: settings);
+
+    battle.rage = battle.ultimateCost;
+    await tester.tapAt(tester.getCenter(find.byType(BoardView)));
+    await advance(tester, 0.4);
+    await tester.tap(find.text('斩月'));
+    await advance(tester, 0.3);
+    expect(find.text('取消'), findsOneWidget, reason: '进入瞄准态');
+
+    // 洗牌（不落点的道具）必须把瞄准态一起收掉——否则玩家下一次点棋盘
+    // （本意是选宝石）会把必杀直接放出去，怒气白扣。
+    await tester.tap(find.text('洗牌'));
+    await advance(tester, 1.2);
+    expect(find.text('取消'), findsNothing, reason: '洗牌要收掉瞄准态');
+
+    final rageBefore = battle.rage;
+    await tester.tapAt(tester.getCenter(find.byType(BoardView)));
+    await advance(tester, 2.0);
+    expect(
+      battle.rage,
+      rageBefore,
+      reason: '点棋盘是选宝石，不该触发必杀',
+    );
+  });
 }

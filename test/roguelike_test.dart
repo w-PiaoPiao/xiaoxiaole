@@ -68,7 +68,7 @@ void main() {
         'bloodPact',
         'ascetic',
       ];
-      const legendaryIds = ['plague', 'eternalCombo', 'moonBlessing'];
+      const legendaryIds = ['plague', 'eternalCombo', 'moonBlessing', 'unbroken'];
       for (final id in rareIds) {
         expect(UpgradePool.byId(id)!.rarity, UpgradeRarity.rare, reason: id);
       }
@@ -538,6 +538,29 @@ void main() {
         const BoardRules(lineBecomesCross: true),
       );
       expect(cleared.length, 15);
+    });
+  });
+
+  group('牌池可达性', () {
+    test('每张牌的前置链都可达成（没有永远抽不到的死牌）', () {
+      // 全叠满配置 = 任何"需要铺垫"的条件都已被满足。若某张牌在这个
+      // 配置下仍 available 为 false，玩家就永远见不到它——「过载引擎」
+      // 的死牌事故就是这么埋下的：yellowRage 从 9 削到 4 时门槛没跟着
+      // 改（17 > 4+2×5），一整条稀有机制静默失效了半年。
+      var full = Campaign.player;
+      for (final upgrade in UpgradePool.all) {
+        for (var i = 0; i < upgrade.maxStacks; i++) {
+          full = upgrade.apply(full);
+        }
+      }
+      for (final upgrade in UpgradePool.all) {
+        expect(
+          upgrade.available?.call(full) ?? true,
+          isTrue,
+          reason: '${upgrade.id}（${upgrade.name}）在全叠满配置下仍不可达——'
+              '玩家永远抽不到它。检查 available 门槛与前置链（基础值 × 叠层上限）',
+        );
+      }
     });
   });
 }

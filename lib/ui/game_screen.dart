@@ -28,7 +28,7 @@ import 'upgrade_art.dart';
 
 /// 一局游戏的总控：串起棋盘结算、战斗数值与全部动画时序。
 ///
-/// 一个 [GameScreen] 承载一局：战役打完六关进通关结算；无尽模式波次
+/// 一个 [GameScreen] 承载一局：战役打完十三关进通关结算；无尽模式波次
 /// 无限、敌人逐波增强，直到玩家倒下。进入时从第一关（或恢复存档）开始。
 class GameScreen extends StatefulWidget {
   /// 设置与存档。不传则内部自建一份（用于预览与测试，不落盘）。
@@ -37,7 +37,7 @@ class GameScreen extends StatefulWidget {
   /// 音效与触感。不传则内部自建一份。
   final SfxController? sfx;
 
-  /// 游戏模式：战役（六关）或无尽（波次无限）。
+  /// 游戏模式：战役（十三关）或无尽（波次无限）。
   final GameMode mode;
 
   /// 起始的关卡索引（战役）或波次 - 1（无尽）。
@@ -167,7 +167,7 @@ class _GameScreenState extends State<GameScreen>
           ? resume.carryHp.clamp(1, _profile.maxHp)
           : _profile.maxHp;
     } else {
-      _levelIndex = widget.startLevel;
+      _levelIndex = _clampLevel(widget.startLevel);
     }
     _startLevel(_levelIndex, persistResume: false);
     // 首局的存档要等第一帧之后再写：saveResume 会 notifyListeners，而监听者
@@ -180,8 +180,9 @@ class _GameScreenState extends State<GameScreen>
 
   /// 把存档里的关卡号夹进当前模式的合法范围。
   ///
-  /// 存档可能来自旧版本或已被改坏（例如战役只有六关却写着 99），这里必须
+  /// 存档可能来自旧版本或已被改坏（例如战役只有十三关却写着 99），这里必须
   /// 兜住——否则 `Campaign.levels[_levelIndex]` 会在开局瞬间 RangeError。
+  /// 外部直接构造 [GameScreen] 传入的 [GameScreen.startLevel] 也走这里。
   int _clampLevel(int level) {
     if (level < 0) return 0;
     if (widget.mode == GameMode.campaign) {
@@ -222,6 +223,14 @@ class _GameScreenState extends State<GameScreen>
     _applySettings();
   }
 
+  /// 上一次同步到特效/音效层的设置值：用于跳过与设置无关的 notifyListeners
+  /// （saveResume 每次存档都会广播，但设置并没有变——不跳过的话，每次用
+  /// 道具、每次换关都要全树重建两次）。
+  bool? _lastSound;
+  bool? _lastHaptics;
+  bool? _lastScreenShake;
+  bool? _lastReduceMotion;
+
   /// 把设置（以及系统的"减少动态效果"）同步到特效层与音效层。
   void _applySettings() {
     sfx.soundEnabled = settings.sound;
@@ -231,6 +240,16 @@ class _GameScreenState extends State<GameScreen>
     fx.allowShake = settings.screenShake && !reduceMotion;
     fx.allowFlash = !reduceMotion;
     fx.reducedMotion = reduceMotion;
+    final changed =
+        _lastSound != settings.sound ||
+        _lastHaptics != settings.haptics ||
+        _lastScreenShake != settings.screenShake ||
+        _lastReduceMotion != reduceMotion;
+    _lastSound = settings.sound;
+    _lastHaptics = settings.haptics;
+    _lastScreenShake = settings.screenShake;
+    _lastReduceMotion = reduceMotion;
+    if (!changed) return;
     // 暂停菜单里的设置开关值来自本 State 的 build：改完必须重建，否则开关
     // 不会变色，再点一次也仍然发出同一个旧值（看起来就像开关坏了）。
     _refresh();
@@ -540,6 +559,20 @@ class _GameScreenState extends State<GameScreen>
     }
   }
 
+  /// 收掉瞄准态（必杀落点 / 锤子落点 / 选中金框）。
+  ///
+  /// 洗牌与凝滞不经过瞄准链路，但它们会重排棋盘或推进敌方——此时若还
+  /// 挂着必杀瞄准，玩家下一次点棋盘（本意是选宝石）就会把必杀直接放出去，
+  /// 怒气白白蒸发。所有"不落点"的道具入口都要先走这里。
+  void _disarmAiming() {
+    if (!_aimingUltimate && !_aimingItem && _selected == null) return;
+    setState(() {
+      _aimingUltimate = false;
+      _aimingItem = false;
+      _selected = null;
+    });
+  }
+
   /// 点「斩月」：第一次点是进入选落点状态，再点一次是取消。
   ///
   /// 必杀固定在棋盘正中央也能用，但把落点交给玩家之后，它就从一个"到点就按"
@@ -562,9 +595,13 @@ class _GameScreenState extends State<GameScreen>
   Future<void> _fireUltimate(int centerIndex) async {
     if (_busy || !battle.canCastUltimate) return;
     _busy = true;
-    _aimingUltimate = false;
     _clearHint();
-    setState(() => _selected = null);
+    // 瞄准态的清理必须进 setState：只改字段的话父级不会重建，BoardView
+    // 拿到的还是旧的瞄准态，取景预览不会消失。
+    setState(() {
+      _aimingUltimate = false;
+      _selected = null;
+    });
     final run = _runId;
     final engine = board;
     final state = battle;
@@ -695,6 +732,9 @@ class _GameScreenState extends State<GameScreen>
   Future<void> _useShuffle() async {
     if (_busy || battle.isOver) return;
     if ((_items[ItemKind.shuffle.id] ?? 0) <= 0) return;
+    // 洗牌会重排棋盘：挂着必杀/锤子瞄准的话先收掉，否则玩家下一击
+    // （本意是选宝石）会把必杀直接放出去。
+    _disarmAiming();
     _items[ItemKind.shuffle.id] = math.max(
       0,
       (_items[ItemKind.shuffle.id] ?? 1) - 1,
@@ -732,6 +772,7 @@ class _GameScreenState extends State<GameScreen>
   void _useStall() {
     if (_busy || battle.isOver) return;
     if ((_items[ItemKind.stall.id] ?? 0) <= 0) return;
+    _disarmAiming();
     final delayed = battle.delayEnemyAttack();
     if (delayed == 0) {
       sfx.reject();
@@ -1045,8 +1086,9 @@ class _GameScreenState extends State<GameScreen>
     final lastLevel = campaign && _levelIndex >= Campaign.levels.length - 1;
     // 打到「终局」的局（战役通关、任何模式战败）不再算进行中：主菜单的
     // 「继续游戏」随之消失。战败仍可当场重试，重开会重新写入存档。
+    // 只清本模式的槽——另一个模式挂起的对局与此无关。
     if (!battle.isWon || lastLevel) {
-      settings.clearResume();
+      settings.clearResume(mode: widget.mode);
     }
 
     // 通关一关发三张强化牌：这是"越打越猛"的全部来源。无尽模式每波都发，
@@ -1057,8 +1099,10 @@ class _GameScreenState extends State<GameScreen>
             taken: _taken,
             rng: _runRng,
             depth: _levelIndex,
-            // 肉鸽层只在无尽模式启用：战役一共只有五次选择机会，稀有度分层
-            // 与质变牌都来不及展开，反而会把那条紧凑的成长线搅乱。
+            // 肉鸽层只在无尽模式启用：战役一共 12 次选择机会，原本"只有
+            // 五次选择"的口径在扩到十三关后已经过时——但稀有度分层是否
+            // 回到战役是个独立的数值决策（选择次数翻倍后其实够了），
+            // 改之前先跑 tool/balance_report.dart 对比三流通关率。
             roguelike: !campaign,
           )
         : const <Upgrade>[];
@@ -1794,6 +1838,9 @@ class _GameScreenState extends State<GameScreen>
       modeLabel: widget.mode == GameMode.campaign
           ? '战役'
           : '无尽 · 第 ${_levelIndex + 1} 波',
+      // 菜单不是硬暂停：演出还在背后走，把血线挂在标题下让玩家盯着。
+      battleStatus: '生命 ${battle.playerHp}/${_profile.maxHp}'
+          '${battle.shield > 0 ? ' · 护盾 ${battle.shield}' : ''}',
       // 无尽模式里没有「关」：同一个按钮要说成「从第 1 波重来」。
       restartLabel: widget.mode == GameMode.campaign
           ? (_taken.isEmpty ? '回到第一关' : '重开一局（清空强化）')
@@ -1874,7 +1921,9 @@ class _GameScreenState extends State<GameScreen>
                     ),
                   ),
                   SizedBox(height: tightOffer ? 4 : 10),
-                  if (won) _starRow(),
+                  // 星级只对战役有意义(落档、解锁)——无尽模式画三颗星
+                  // 只会让人以为它存了什么。
+                  if (won && !endless) _starRow(),
                   SizedBox(height: tightOffer ? 4 : 10),
                   Text(
                     won
@@ -1935,6 +1984,14 @@ class _GameScreenState extends State<GameScreen>
                       children: [
                         if (won && lastLevel)
                           _primaryButton('重新开始', _restartCampaign),
+                        // 战役的强化池总容量远大于 12 次选择，正常打不到
+                        // "赢了却没牌可选"；但真发生时（未来牌池调整、
+                        // available 收紧）胜利结算必须留一条去路。
+                        if (won && !endless && !lastLevel)
+                          _primaryButton(
+                            '下一关',
+                            () => _startLevel(_levelIndex + 1),
+                          ),
                         // 无尽模式连强化池都叠满了，这一波之后没有牌可发——
                         // 但路必须留着，否则玩家只能退到主菜单重打当前波。
                         if (won && endless && _offer.isEmpty)
@@ -2230,10 +2287,7 @@ class _GameScreenState extends State<GameScreen>
 
   Widget _primaryButton(String label, VoidCallback onTap) {
     return GestureDetector(
-      onTap: () {
-        sfx.tap();
-        onTap();
-      },
+      onTap: () => _guardedPanelTap(onTap),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 13),
         decoration: BoxDecoration(
@@ -2256,12 +2310,22 @@ class _GameScreenState extends State<GameScreen>
     );
   }
 
+  /// 结算面板按钮的同帧双击防护：双指同帧点击时（重建之前旧的命中树还在）
+  /// onTap 会被触发两次——「回到主菜单」连 pop 两次会把主菜单也弹出栈。
+  /// [_takeUpgrade] 已有 _offer.contains 防护，这里给两个按钮工厂兜同样的底。
+  int _lastPanelTapMs = -1000;
+
+  void _guardedPanelTap(VoidCallback onTap) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastPanelTapMs < 300) return;
+    _lastPanelTapMs = now;
+    sfx.tap();
+    onTap();
+  }
+
   Widget _ghostButton(String label, VoidCallback onTap) {
     return GestureDetector(
-      onTap: () {
-        sfx.tap();
-        onTap();
-      },
+      onTap: () => _guardedPanelTap(onTap),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
         decoration: BoxDecoration(

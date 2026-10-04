@@ -25,7 +25,7 @@ class EndlessRoster {
   ///  - 攻击按线性增长，并被「单次伤害不超过最大生命 65%」封顶保护，
   ///    高波次不会变成一击必杀的抽奖。
   ///
-  /// 生命增速定在 1.14 而不是更陡的 1.18：血量是复利，0.03 的差别到第
+  /// 生命增速定在 1.13 而不是更陡的 1.18：血量是复利，0.03 的差别到第
   /// 20 波就是 24% 的总血量。曲线陡了，多管血与精英词条辛苦搭出来的
   /// "台阶感"会被指数曲线提前掐死——玩家还没见到第 16 波的 4 管血，
   /// 就已经被单纯的数字压死了。
@@ -57,6 +57,11 @@ class EndlessRoster {
 
   /// 精英词条：从第 4 波开始每 3 波多带一条，BOSS 的「能力增强」不止是数字，
   /// 还会拿到战役模式里才能见到的机制（护盾再生、吸血、禁疗、狂暴、汲魂）。
+  ///
+  /// 去重白名单（在 [enemyFor] 的词条循环里生效）只有 **thirst / siphon**
+  /// ——角色自带的同款机制让词条额度让给别的波。aegis（+24 盾再生）与
+  /// choke（+1 禁疗回合）对自带机制的角色是**刻意叠加**的：加法量级可控，
+  /// 别"补齐"成去重——那会把高波次压塌。
   static const List<String> modifierIds = [
     'aegis', // 坚壁：护盾再生
     'thirst', // 嗜血：吸血
@@ -130,10 +135,9 @@ class EndlessRoster {
   ///
   /// 总血量 = 每管 × 管数：3 管时约 1.0 倍、4 管时约 1.2 倍。多形态本身
   /// 已经带来「溢出浪费 + 每管优势清零重来」的额外消耗，总血量再翻倍就
-  /// 没人跑得远了。
+  /// 没人跑得远了。管数只有 1/3/4（见 [phasesFor]），没有 2 管的档位。
   static const Map<int, double> _phaseHpFactor = {
     1: 1.0,
-    2: 0.5,
     3: 0.33,
     4: 0.3,
   };
@@ -174,6 +178,7 @@ class EndlessRoster {
       rageDrain: shape.rageDrain,
       skill: skill,
       skillEvery: shape.skillEvery,
+      phaseAttackGrowth: shape.phaseAttackGrowth,
       attritionRamp: attritionRamp,
       themeColor: shape.themeColor,
     );
@@ -230,6 +235,7 @@ class EndlessRoster {
       rageDrain: rageDrain,
       skill: def.skill,
       skillEvery: def.skillEvery,
+      phaseAttackGrowth: def.phaseAttackGrowth,
       attritionRamp: def.attritionRamp,
       themeColor: def.themeColor,
     );

@@ -231,23 +231,42 @@ class BattleState {
   ///
   /// 与 [_enemyAct] 共用预测：减伤、单次伤害封顶与技能的追加段都要算进来，
   /// 否则预警是个永远偏小的数字——影分身回合按它决定补血就会误判。
+  ///
+  /// 消耗战倍率按**出手时刻**的回合数推：预警在玩家回合中读，而那一击
+  /// 落在本回合末（[endPlayerTurn] 先 ++ 回合数再结算敌人）。不 +1 的话，
+  /// 台阶跨越的那一击（100/112/124…回合）预警会比实伤低整整一档，
+  /// 玩家按预警留的血正好被那一击收走。
   int get incomingDamage {
+    final strikeTurns = playerTurns + 1;
     var total = _predictAttackDamage(
       def.attack.toDouble(),
       isHeavy: nextAttackIsHeavy,
+      strikeTurns: strikeTurns,
     );
     final skill = def.skill;
     if (nextAttackIsSkill && skill?.kind == EnemySkillKind.shadowStrike) {
-      total += _predictAttackDamage(def.attack * skill!.ratio, isHeavy: false);
+      total += _predictAttackDamage(
+        def.attack * skill!.ratio,
+        isHeavy: false,
+        strikeTurns: strikeTurns,
+      );
     }
     return total;
   }
 
   /// 本次攻击的预测伤害。[base] 是攻击力（重击在外层乘好倍率）。
   ///
+  /// [strikeTurns] 是"出手时刻"的玩家回合数：[_enemyAct] 结算时
+  /// [playerTurns] 已经 ++ 过，天然就是出手时刻，无需传；预警语境
+  /// （[incomingDamage]）要传 [playerTurns] + 1。
+  ///
   /// 顺序是刻意的：「硬化」减伤在封顶**之前**结算——上限保护的是玩家能
   /// 承受的最大一击，不该被减伤绕过。
-  int _predictAttackDamage(double base, {required bool isHeavy}) {
+  int _predictAttackDamage(
+    double base, {
+    required bool isHeavy,
+    int? strikeTurns,
+  }) {
     var raw = base * (isHeavy ? def.heavyMultiplier : 1.0);
     // 形态递增：每打空一管血，敌人的下一次出手就更凶一档。预警算的是
     // 「下一次」的伤害，所以这里的形态系数必须和 [_enemyAct] 用的是同一个。
@@ -269,7 +288,7 @@ class BattleState {
     // 乘在它前面的系数（攻击成长、狂暴、毒藤、僵持惩罚）超过天花板后
     // 全部作废——实测把惩罚放在封顶前，"打不动"的对局依然能满血磨到
     // 400 回合。僵持越久、上限保护越挡不住，才是这条曲线该有的样子。
-    raw *= _attritionMul;
+    raw *= _attritionMulFor(strikeTurns ?? playerTurns);
     return raw.round();
   }
 
@@ -283,11 +302,10 @@ class BattleState {
   static const int attritionStartTurn = 100;
   static const int attritionEveryTurns = 12;
 
-  /// 消耗战惩罚的当前倍率（没有僵持就是 1.0）。
-  double get _attritionMul {
-    if (def.attritionRamp <= 0 || playerTurns < attritionStartTurn) return 1.0;
-    final steps =
-        (playerTurns - attritionStartTurn) ~/ attritionEveryTurns + 1;
+  /// 消耗战惩罚的当前倍率（[turns] 是"出手时刻"的玩家回合数；没有僵持就是 1.0）。
+  double _attritionMulFor(int turns) {
+    if (def.attritionRamp <= 0 || turns < attritionStartTurn) return 1.0;
+    final steps = (turns - attritionStartTurn) ~/ attritionEveryTurns + 1;
     return 1 + def.attritionRamp * steps;
   }
 
@@ -540,6 +558,9 @@ class BattleState {
 
   void _checkEnrage(List<CombatEvent> events) {
     if (!def.enrages || enraged) return;
+    // 打空一管的这一击不算：enemyHp==0 时马上要转形态，狂暴要在新形态
+    // 满血下重新判定——否则事件流里会先闪一条假"狂暴"再播转形态。
+    if (enemyHp <= 0) return;
     if (enemyHp / def.maxHp <= def.enrageAt) {
       enraged = true;
       events.add(const CombatEvent(CombatEventKind.enrage, 0, '狂暴'));
@@ -805,7 +826,10 @@ class BattleState {
     }
 
     // 「荆棘壁垒」：被护盾扛下来的伤害，有一部分会扎回敌人身上。
-    if (absorbed > 0 && fx.shieldReflect > 0) {
+    // 玩家已经倒下就不再反弹——"同归于尽判玩家输"以本方法末行的
+    // playerHp 判定为权威（它排在反弹之后，这一行序被测试守着），
+    // 人已经倒了，扎这一针对结局没有任何影响。
+    if (playerHp > 0 && absorbed > 0 && fx.shieldReflect > 0) {
       final reflected = (absorbed * fx.shieldReflect).round();
       if (reflected > 0) {
         log.insert(0, '荆棘反弹 $reflected 点伤害');
@@ -824,8 +848,9 @@ class BattleState {
       log.insert(0, '你被诅咒：治疗效果减半');
     }
 
-    // 「汲魂」：命中时夺走怒气。必杀是玩家唯一的翻盘点数，被抽走的那几个
-    // 回合就是这类敌人真正的威胁——哪怕伤害本身不痛。
+    // 「汲魂」：出手即抽，与这一击是否被护盾挡下无关——哪怕伤害本身不痛，
+    // 护盾流也要被抽走翻盘点数。这是对纯护盾流刻意保留的一丝压制。
+    // 必杀是玩家唯一的翻盘点数，被抽走的那几个回合就是这类敌人真正的威胁。
     if (def.rageDrain > 0 && rage > 0) {
       final stolen = min(rage, def.rageDrain);
       rage -= stolen;

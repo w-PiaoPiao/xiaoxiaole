@@ -133,10 +133,28 @@ void main() {
         ix(1, 4): 'R.',
       });
       lockAt(board, ix(4, 4), ObstacleKind.frost); // 在 3x3 波及范围内
+      lockAt(board, ix(5, 5), ObstacleKind.vine); // 范围外，但与 (4,5) 相邻
+      final frozenId = board.cells[ix(4, 4)]!.id;
+      final vinedId = board.cells[ix(5, 5)]!.id;
       board.swapCells(ix(3, 3), ix(3, 4));
       final steps = board.resolveSwap(ix(3, 3), ix(3, 4));
       final breaks = [for (final s in steps) ...s.obstacleBreaks];
       expect(breaks.map((b) => b.index), contains(ix(4, 4)));
+      expect(breaks.map((b) => b.index), contains(ix(5, 5)));
+      // 口径钉死（与 README 一致）：被爆炸**直接命中**的机关格连壳带石
+      // 一起清掉；仅被**波及**的机关格破壳、宝石留在棋盘上。
+      final clearedIds = [
+        for (final s in steps) for (final c in s.cleared) c.gemId,
+      ];
+      expect(
+        clearedIds,
+        contains(frozenId),
+        reason: '直接命中的冰封宝石随清除消失（与锤子同一条"砸碎"口径）',
+      );
+      final vined = board.cells.where((g) => g?.id == vinedId).toList();
+      expect(vined.length, 1, reason: '波及的毒藤只破壳，宝石留下');
+      expect(vined.single!.obstacle, isNull);
+      expect(board.countHoles(), 0);
     });
 
     test('棋盘安静时机关不会自己消失', () {

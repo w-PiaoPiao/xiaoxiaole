@@ -29,7 +29,7 @@ void main() {
       for (var wave = 2; wave <= 30; wave++) {
         final prev = EndlessRoster.enemyFor(wave - 1);
         final cur = EndlessRoster.enemyFor(wave);
-        // 比的是总血量：第 9 / 16 波开始多一管，单看每管血量会在这些波次回落。
+        // 比的是总血量：第 10 / 17 波开始多一管，单看每管血量会在这些波次回落。
         expect(cur.totalHp, greaterThan(prev.totalHp), reason: '第 $wave 波');
         expect(cur.attack, greaterThan(prev.attack), reason: '第 $wave 波');
       }
@@ -154,6 +154,29 @@ void main() {
           );
         }
       }
+    });
+  });
+
+  group('精英词条机制', () {
+    test('thirst 对自带吸血的角色去重，choke 逐条加法叠加', () {
+      // 第 22 波 = 吸血鬼模板（自带 drainRatio 0.20）+ 7 条词条：
+      // aegis, thirst, choke, frenzy, siphon, aegis, thirst。
+      final vampire = Campaign.levels
+          .firstWhere((l) => l.enemy.id == 'vampire')
+          .enemy;
+      final w22 = EndlessRoster.enemyFor(22);
+      expect(w22.id, 'vampire');
+      expect(
+        w22.drainRatio,
+        vampire.drainRatio * 0.55,
+        reason: '×0.55 只是无尽的回复缩放；thirst 的 +0.08 两次都必须让位，'
+            '否则"每打 1000 回 210"的墙会把输出流成批拍死在高波',
+      );
+      expect(
+        w22.healBlockTurns,
+        vampire.healBlockTurns + 1,
+        reason: 'choke 是刻意的加法叠加（+1/条），7 条词条里 choke 出现一次',
+      );
     });
   });
 }

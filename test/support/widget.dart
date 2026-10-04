@@ -26,4 +26,7 @@ Future<void> waitFor(
     if (finder.evaluate().isNotEmpty) return;
     await tester.pump(const Duration(milliseconds: 100));
   }
+  // 静默返回会让失败延迟到后面的某个 expect，报出来的原因是"找不到文本"
+  // 而不是"等了 $timeout 秒没等到"——当场失败并把目标写清楚。
+  fail('waitFor 超时（$timeout 秒）：未等到 ${finder.describeMatch(Plurality.one)}');
 }

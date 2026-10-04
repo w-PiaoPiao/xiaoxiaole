@@ -25,7 +25,7 @@ void _singleLevelReport(int seeds) {
   // 报告只有终局残血，于是"前四关敌人每回合输出低于玩家续航"这个失衡
   // 一直没被发现（净收支全为正，玩家在打木桩）。
   print(
-    '关卡 敌人        血量  正常:胜/负/僵  回合  终局残血   最低血(均/最差)   '
+    '关卡 敌人          总血  正常:胜/负/僵  回合  终局残血   最低血(均/最差)   '
     '莽夫:胜/负  回合  莽夫残血  敌出手',
   );
   for (var level = 0; level < Campaign.levels.length; level++) {
@@ -62,10 +62,15 @@ void _singleLevelReport(int seeds) {
       bAttacks += b.enemyAttacks;
     }
     final maxHp = Campaign.player.maxHp;
+    // 血量列打 totalHp：多管 BOSS 打"每管"值的话，曲线会看起来"越往后越脆"
+    // （第 5 关 1870 < 第 1 关 2600），纯视觉误导。
+    final hpLabel = def.phases > 1
+        ? '${def.totalHp}×${def.phases}'
+        : '${def.totalHp}';
     print(
       '${(level + 1).toString().padRight(5)}'
       '${def.name.padRight(12)}'
-      '${def.maxHp.toString().padRight(6)}'
+      '${hpLabel.padRight(10)}'
       '${'$bw/$bl/$bt'.padRight(13)}'
       '${(bturns / seeds).toStringAsFixed(1).padRight(5)}'
       '${'${(bHp / seeds).round()}/$maxHp'.padRight(11)}'
@@ -82,6 +87,8 @@ void _campaignReport(int rounds) {
   print('');
   print('整场挑战（每赢一关吃一条强化，生命按 50% 保底续到下一关）');
   print('策略    通关  第1关残血  第3关残血  终关残血  终关回合  未过卡在  典型 build');
+  print('             （残血两列按全部种子均摊：没活到那一关记 0——这一列同时'
+      '编码了到达率，失败越早均值越低是口径使然，不是那一关变脆了）');
   for (final style in PickStyle.values) {
     var cleared = 0;
     var hp1 = 0.0, hp3 = 0.0, hpLast = 0.0, turnsLast = 0.0;

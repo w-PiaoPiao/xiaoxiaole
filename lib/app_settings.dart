@@ -19,11 +19,16 @@ class AppSettings extends ChangeNotifier {
   static const _kTurnsPrefix = 'progress.turns.';
   static const _kEndlessBest = 'progress.endlessBest';
 
-  /// 「继续游戏」存档：整局状态序列化成一个 JSON 字符串存在单个键里。
+  /// 「继续游戏」存档：战役与无尽**各占一个槽**，每槽整局状态序列化成
+  /// 一个 JSON 字符串。
   ///
   /// 单键写入是为了**自洽**：分开写 mode / level / 强化时，中途被杀会留下
   /// "新关卡 + 旧强化"这类半截组合，恢复出来的 build 与退出时并不一致。
+  /// 曾经整个游戏只有单个槽：从无尽切去战役随便开一局，无尽进度就被
+  /// 静默覆盖、不可恢复——分槽之后两边互不干扰，`resume` 取较新的那个。
   static const _kResume = 'progress.resume';
+  static const _kResumeCampaign = 'progress.resume.campaign';
+  static const _kResumeEndless = 'progress.resume.endless';
 
   // 旧版（散键）格式，仅用于读档兼容与清理，不再写入。
   static const _kResumeMode = 'progress.resume.mode';
@@ -59,10 +64,31 @@ class AppSettings extends ChangeNotifier {
   int get unlockedLevel => _unlockedLevel;
   int get endlessBest => _endlessBest;
 
-  /// 进行中的一局（主菜单的「继续游戏」）。null 表示没有可继续的对局。
-  ResumeData? _resume;
+  /// 进行中的对局，按模式分槽（见 [_kResumeCampaign] 的说明）。
+  ResumeData? _resumeCampaign;
+  ResumeData? _resumeEndless;
 
-  ResumeData? get resume => _resume;
+  /// 进行中的一局（主菜单的「继续游戏」）：两个模式槽里**较新**的那个。
+  /// null 表示没有可继续的对局。
+  ResumeData? get resume {
+    final c = _resumeCampaign;
+    final e = _resumeEndless;
+    if (c == null) return e;
+    if (e == null) return c;
+    return e.savedAt >= c.savedAt ? e : c;
+  }
+
+  /// 某个模式的进行中对局。null 表示该模式没有可继续的对局。
+  ResumeData? resumeFor(GameMode mode) =>
+      mode == GameMode.endless ? _resumeEndless : _resumeCampaign;
+
+  void _setResume(GameMode mode, ResumeData? data) {
+    if (mode == GameMode.endless) {
+      _resumeEndless = data;
+    } else {
+      _resumeCampaign = data;
+    }
+  }
 
   int starsOf(int levelIndex) => bestStars[levelIndex] ?? 0;
   int turnsOf(int levelIndex) => bestTurns[levelIndex] ?? 0;
@@ -87,7 +113,9 @@ class AppSettings extends ChangeNotifier {
       _screenShake = _bool(p, _kScreenShake, true);
       _unlockedLevel = _nonNegative(_int(p, _kUnlocked, 0));
       _endlessBest = _nonNegative(_int(p, _kEndlessBest, 0));
-      _resume = _readResume(p);
+      _resumeCampaign = null;
+      _resumeEndless = null;
+      _readResume(p);
       for (final key in p.getKeys()) {
         if (key.startsWith(_kStarsPrefix)) {
           final index = int.tryParse(key.substring(_kStarsPrefix.length));
@@ -157,39 +185,23 @@ class AppSettings extends ChangeNotifier {
     return out;
   }
 
-  ResumeData? _readResume(SharedPreferences p) {
-    final packed = _string(p, _kResume);
-    if (packed != null) {
-      try {
-        final decoded = jsonDecode(packed);
-        if (decoded is Map) {
-          final level = decoded['level'];
-          // level 越界（战役只有 6 关）留给上层按模式夹取，这里只挡负数
-          // ——读档层不认识 Campaign，不该替它做范围判断。
-          if (level is int && level >= 0) {
-            final hp = decoded['hp'];
-            return ResumeData(
-              mode: decoded['mode'] == 'endless'
-                  ? GameMode.endless
-                  : GameMode.campaign,
-              level: level,
-              carryHp: hp is int ? _nonNegative(hp) : 0,
-              upgrades: _sanitizeUpgrades(decoded['upgrades']),
-              // 旧存档没有 items 键：当作空库存，开局时按默认发放。
-              items: _sanitizeItems(decoded['items']),
-            );
-          }
-        }
-      } catch (_) {
-        // JSON 坏了：当作没有这局存档，不让它挡住启动。
-      }
-      return null;
+  /// 读档：旧单键（迁移进对应模式的槽）→ 新双槽 → 旧散键（更老版本兜底）。
+  void _readResume(SharedPreferences p) {
+    final legacy = _decodeResume(_string(p, _kResume));
+    if (legacy != null) {
+      _setResume(legacy.mode, legacy);
     }
+    final campaign = _decodeResume(_string(p, _kResumeCampaign));
+    if (campaign != null) _setResume(GameMode.campaign, campaign);
+    final endless = _decodeResume(_string(p, _kResumeEndless));
+    if (endless != null) _setResume(GameMode.endless, endless);
 
-    // 旧格式（散键）兼容：老存档也能继续打。
+    if (_resumeCampaign != null || _resumeEndless != null) return;
+
+    // 旧版（散键）格式兜底：老存档也能继续打。
     final mode = _string(p, _kResumeMode);
     final level = _int(p, _kResumeLevel, -1);
-    if (mode == null || level < 0) return null;
+    if (mode == null || level < 0) return;
     final upgrades = <String, int>{};
     for (final key in p.getKeys()) {
       if (!key.startsWith(_kResumeUpgradesPrefix)) continue;
@@ -199,12 +211,46 @@ class AppSettings extends ChangeNotifier {
         upgrades[id] = stacks.clamp(1, _maxUpgradeStacks);
       }
     }
-    return ResumeData(
-      mode: mode == 'endless' ? GameMode.endless : GameMode.campaign,
-      level: level,
-      carryHp: _nonNegative(_int(p, _kResumeHp, 0)),
-      upgrades: upgrades,
+    _setResume(
+      mode == 'endless' ? GameMode.endless : GameMode.campaign,
+      ResumeData(
+        mode: mode == 'endless' ? GameMode.endless : GameMode.campaign,
+        level: level,
+        carryHp: _nonNegative(_int(p, _kResumeHp, 0)),
+        upgrades: upgrades,
+      ),
     );
+  }
+
+  /// 解析一槽的 JSON；损坏或字段不合法时返回 null（当作没有这局存档）。
+  ResumeData? _decodeResume(String? packed) {
+    if (packed == null) return null;
+    try {
+      final decoded = jsonDecode(packed);
+      if (decoded is Map) {
+        final level = decoded['level'];
+        // level 越界（十三关之外）留给上层按模式夹取，这里只挡负数
+        // ——读档层不认识 Campaign，不该替它做范围判断。
+        if (level is int && level >= 0) {
+          final hp = decoded['hp'];
+          final savedAt = decoded['savedAt'];
+          return ResumeData(
+            mode: decoded['mode'] == 'endless'
+                ? GameMode.endless
+                : GameMode.campaign,
+            level: level,
+            carryHp: hp is int ? _nonNegative(hp) : 0,
+            upgrades: _sanitizeUpgrades(decoded['upgrades']),
+            // 旧存档没有 items 键：当作空库存，开局时按默认发放。
+            items: _sanitizeItems(decoded['items']),
+            savedAt: savedAt is int ? savedAt : 0,
+          );
+        }
+      }
+    } catch (_) {
+      // JSON 坏了：当作没有这局存档，不让它挡住启动。
+    }
+    return null;
   }
 
   // ------------------------------------------------------------ 写入
@@ -291,31 +337,72 @@ class AppSettings extends ChangeNotifier {
   }
 
   /// 写下进行中的一局，供主菜单的「继续游戏」恢复。
+  ///
+  /// 写入 [data.mode] 对应的槽，另一边的进度原样保留。
   void saveResume(ResumeData data) {
-    _resume = data;
+    // 同一毫秒内连续写两个槽（测试/快速操作）会让「取较新」的平局判定
+    // 不稳定：保证新写入的时间戳严格大于另一槽，后写的永远赢。
+    var now = DateTime.now().millisecondsSinceEpoch;
+    final opposite = resumeFor(
+      data.mode == GameMode.endless ? GameMode.campaign : GameMode.endless,
+    );
+    if (opposite != null && now <= opposite.savedAt) {
+      now = opposite.savedAt + 1;
+    }
+    final stamped = ResumeData(
+      mode: data.mode,
+      level: data.level,
+      carryHp: data.carryHp,
+      upgrades: data.upgrades,
+      items: data.items,
+      savedAt: now,
+    );
+    _setResume(data.mode, stamped);
     _persist((p) async {
       await p.setString(
-        _kResume,
+        data.mode == GameMode.endless ? _kResumeEndless : _kResumeCampaign,
         jsonEncode({
           'mode': data.mode == GameMode.endless ? 'endless' : 'campaign',
           'level': data.level,
           'hp': data.carryHp,
           'upgrades': data.upgrades,
           'items': data.items,
+          // 分槽后用时间戳决定「继续游戏」恢复哪一槽；旧档没有这个字段，
+          // 读作 0（输给任何新写入）。
+          'savedAt': now,
         }),
       );
+      // 单槽时代的旧键：新格式落盘后删掉，避免复活已被覆盖的进度。
+      await p.remove(_kResume);
       await _removeLegacyResumeKeys(p);
     });
     notifyListeners();
   }
 
   /// 清掉「继续游戏」存档（一局打完 / 从头开始时调用）。
-  void clearResume() {
-    if (_resume == null) return;
-    _resume = null;
+  ///
+  /// [mode] 为空时全清；指定模式则只清该模式的槽——战败或重开不该把
+  /// 另一个模式挂起的对局一起抹掉。
+  void clearResume({GameMode? mode}) {
+    if (mode == null) {
+      if (_resumeCampaign == null && _resumeEndless == null) return;
+      _resumeCampaign = null;
+      _resumeEndless = null;
+      _persist((p) async {
+        await p.remove(_kResume);
+        await p.remove(_kResumeCampaign);
+        await p.remove(_kResumeEndless);
+        await _removeLegacyResumeKeys(p);
+      });
+      notifyListeners();
+      return;
+    }
+    if (resumeFor(mode) == null) return;
+    _setResume(mode, null);
     _persist((p) async {
-      await p.remove(_kResume);
-      await _removeLegacyResumeKeys(p);
+      await p.remove(
+        mode == GameMode.endless ? _kResumeEndless : _kResumeCampaign,
+      );
     });
     notifyListeners();
   }
@@ -326,7 +413,8 @@ class AppSettings extends ChangeNotifier {
     bestTurns.clear();
     _unlockedLevel = 0;
     _endlessBest = 0;
-    _resume = null;
+    _resumeCampaign = null;
+    _resumeEndless = null;
     _persist((p) async {
       for (final key in p.getKeys().toList()) {
         if (key.startsWith(_kStarsPrefix) ||
@@ -336,6 +424,8 @@ class AppSettings extends ChangeNotifier {
         }
       }
       await p.remove(_kResume);
+      await p.remove(_kResumeCampaign);
+      await p.remove(_kResumeEndless);
       await _removeLegacyResumeKeys(p);
       await p.setInt(_kUnlocked, 0);
     });
@@ -363,11 +453,16 @@ class ResumeData {
   /// 开局会按默认数量补足。
   final Map<String, int> items;
 
+  /// 写入时刻（epoch 毫秒）。分槽后「继续游戏」取两个槽里较新的那个；
+  /// 旧档没有这个字段，读作 0（输给任何新写入）。
+  final int savedAt;
+
   const ResumeData({
     required this.mode,
     required this.level,
     required this.carryHp,
     required this.upgrades,
     this.items = const {},
+    this.savedAt = 0,
   });
 }

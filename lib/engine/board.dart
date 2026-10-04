@@ -215,6 +215,11 @@ class BoardEngine {
       _fillFresh();
       if (findMatches().isEmpty && hasValidMove()) return;
     }
+    // 300 次全败在五色 8x8 下概率可忽略，但静默接受一个坏盘不如当场炸出来。
+    assert(
+      findMatches().isEmpty && hasValidMove(),
+      'reset() 未能生成可玩棋盘（300 次尝试全败）',
+    );
   }
 
   void _fillFresh() {
@@ -458,7 +463,11 @@ class BoardEngine {
     for (var i = 0; i < cells.length; i++) {
       final gem = cells[i];
       if (gem == null || gem.locked) continue;
-      if (gem.isSpecial) return true;
+      // 棱镜没有颜色、拼不出三连，canSwap 允许它与任何邻居交换——有它在
+      // 棋盘就必然有解。其余强化宝石不享受这个短路：线/爆裂与普通宝石的
+      // 交换仍要拼出三连（经典规则，见 canSwap），在这里放行会把真死盘
+      // 误报成有解——玩家每一步都被拒绝，自动洗牌也不会触发。
+      if (gem.special == SpecialKind.prism) return true;
       final x = xOf(i), y = yOf(i);
       if (x + 1 < cols && canSwap(i, i + 1)) return true;
       if (y + 1 < rows && canSwap(i, i + cols)) return true;
@@ -471,6 +480,21 @@ class BoardEngine {
   /// 被机关附着的宝石原样保留（机关是关卡的布置，不该被洗牌冲掉）——
   /// 失败时会保留机关重排颜色，而不是整盘重建。
   void shuffleBoard() {
+    if (_shuffleColors()) return;
+    // 兜底：整盘重铺，并把机关按原位重新附着（机关是关卡的布置，不能丢）。
+    // 重挂上的机关可能恰好锁死仅剩的可行步，所以重挂后还要再洗一轮颜色。
+    final kept = <int, ObstacleKind>{
+      for (var i = 0; i < cells.length; i++) i: ?cells[i]?.obstacle,
+    };
+    reset();
+    for (final entry in kept.entries) {
+      cells[entry.key]?.obstacle = entry.value;
+    }
+    _shuffleColors();
+  }
+
+  /// 只重排普通宝石的颜色，直到无现成消除且存在可行操作。
+  bool _shuffleColors() {
     for (var attempt = 0; attempt < 120; attempt++) {
       final gems = <Gem>[for (final g in cells) ?g];
       final movable = [
@@ -481,16 +505,9 @@ class BoardEngine {
       for (var i = 0; i < movable.length; i++) {
         movable[i].type = types[i];
       }
-      if (findMatches().isEmpty && hasValidMove()) return;
+      if (findMatches().isEmpty && hasValidMove()) return true;
     }
-    // 兜底：整盘重铺，并把机关按原位重新附着（机关是关卡的布置，不能丢）。
-    final kept = <int, ObstacleKind>{
-      for (var i = 0; i < cells.length; i++) i: ?cells[i]?.obstacle,
-    };
-    reset();
-    for (final entry in kept.entries) {
-      cells[entry.key]?.obstacle = entry.value;
-    }
+    return false;
   }
 
   // ---------------------------------------------------------------- 机关
@@ -931,10 +948,11 @@ class BoardEngine {
       }
     }
 
-    // 机关破除：本次清除范围内的任何一格，连同它的四邻，附着的机关都会
-    // 被打碎（强化宝石的爆炸波及同理）。机关只是附着物——破掉之后宝石
-    // 显形；如果那一格本身不在清除范围内，宝石会完好地留在棋盘上，
-    // 成为玩家可以立刻使用的资源。
+    // 机关破除口径（与 README 一致，测试在 obstacle_test 钉死）：
+    //   - 被消除/爆炸**直接命中**的机关格：连壳带石一起清掉——宝石随清除
+    //     结算消失，颜色照常计入伤害（与锤子同一条"砸碎"口径）；
+    //   - 仅被**波及**（在清除格的四邻上）的机关格：只破壳——宝石显形
+    //     留在棋盘上，成为玩家可以立刻使用的资源。
     final breaks = <ObstacleBreak>[];
     final touched = <int>{};
     for (final i in toClear) {
@@ -1146,7 +1164,11 @@ class BoardEngine {
   /// 被冰封/毒藤锁住的格子还能参与匹配，从而推荐一步在真实棋盘上根本走不出
   /// 的"妙手"（带机关的关卡里提示会整片失真）。
   BoardEngine clone() {
-    final copy = BoardEngine(seed: _rng.nextInt(1 << 30));
+    // 克隆盘的随机序列必须与母盘脱钩：落子顾问一回合要克隆几十次，每次都
+    // 从母盘 _rng 抽种子的话，母盘后续的补位序列就会跟着"按没按提示、当时
+    // 有几步合法交换"漂移——同种子不再复现同一盘，平衡报告的前后对比也就
+    // 失去了可比性。推演补位本来就不需要与真实补位一致，固定派生即可。
+    final copy = BoardEngine(seed: 0x5EEDC10D);
     for (var i = 0; i < cells.length; i++) {
       final gem = cells[i];
       if (gem != null) {

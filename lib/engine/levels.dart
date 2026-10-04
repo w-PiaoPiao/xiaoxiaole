@@ -758,10 +758,13 @@ class Campaign {
         archetype: EnemyArchetype.voidWatcher,
         // 终战 1975×4:每管血刻意压小让消减看得见,总血 7900 仍压过
         // 上一关——十三关的总血量曲线保持单调,这是玩家可感知的
-        // "这一关比上一关更厚"。
+        // "这一关比上一关更厚"。攻击 204 是按"必杀独占一回合"的真实
+        // 推演口径校准的（推演器修正前必杀免费搭在交换回合上,把终战
+        // 的压力整个掩盖了）:出厂档案约 4/14,整场三流的卡点不再
+        // 系统性堆在终战。
         maxHp: 1975,
         phases: 4,
-        attack: 224,
+        attack: 204,
         turnsPerAttack: 2,
         heavyEvery: 3,
         heavyMultiplier: 1.7,

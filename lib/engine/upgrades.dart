@@ -350,13 +350,14 @@ class UpgradePool {
       icon: UpgradeIcon.thorn,
       themeColor: 0xFF5FC8FF,
       rarity: UpgradeRarity.rare,
-      // 两层封顶：反弹到 90% 就成了"挨打即反击"的永动机，生存流会无脑躺赢。
+      // 两层封顶：反弹到 60% 就到头了——再高就是"挨打即反击"的永动机，
+      // 生存流会无脑躺赢。
       maxStacks: 2,
       weight: 7,
       available: (p) => p.maxShield >= 300,
       apply: (p) => p.copyWith(
         effects: p.effects.copyWith(
-          shieldReflect: (p.effects.shieldReflect + 0.30).clamp(0.0, 1.2),
+          shieldReflect: (p.effects.shieldReflect + 0.30).clamp(0.0, 0.6),
         ),
       ),
     ),
@@ -369,10 +370,15 @@ class UpgradePool {
       rarity: UpgradeRarity.rare,
       maxStacks: 2,
       weight: 7,
-      available: (p) => p.yellowRage >= 17,
+      // 门槛 10 = 基础 4 + 三层「蓄能」：yellowRage 的全部来源就这两处
+      // （上限 14），这张牌只在玩家真的把怒气机制铺起来之后才有意义。
+      // 曾经的门槛 17 是 yellowRage=9 时代定的（9+10=19 可达），削到 4
+      // 之后没跟着改，结果成了永远抽不到的死牌——改门槛前先核对这条
+      // 前置链，测试里有可达性元测试守着。
+      available: (p) => p.yellowRage >= 10,
       apply: (p) => p.copyWith(
         effects: p.effects.copyWith(
-          rageOverflowDamage: (p.effects.rageOverflowDamage + 3).clamp(0.0, 9),
+          rageOverflowDamage: (p.effects.rageOverflowDamage + 3).clamp(0.0, 6),
         ),
       ),
     ),
@@ -474,7 +480,10 @@ class UpgradePool {
       maxStacks: 1,
       weight: 7,
       isCostly: true,
-      available: (p) => p.blueShield > 0,
+      // 只递给已经投入护盾流的玩家：对没有护盾的人，"无法获得护盾"毫无
+      // 代价，+90% 红伤就成了白给的输出。基础档案 maxShield=250，
+      // 超过它才说明真的拿过盾牌。
+      available: (p) => p.maxShield > 250,
       apply: (p) => p.copyWith(
         redDamage: (p.redDamage * 1.9).round(),
         critChance: (p.critChance + 0.10).clamp(0.0, 0.8),
@@ -537,7 +546,7 @@ class UpgradePool {
     Upgrade(
       id: 'unbroken',
       name: '不屈',
-      desc: '单次受到的伤害不超过最大生命的 40%',
+      desc: '单次受到的伤害不超过最大生命的 40%（僵持惩罚可以突破）',
       icon: UpgradeIcon.cross,
       themeColor: 0xFF5FC8FF,
       rarity: UpgradeRarity.legendary,
@@ -581,8 +590,9 @@ class UpgradePool {
   /// 后期让质变牌把 build 推向夸张的高度。
   ///
   /// [roguelike] 打开后才启用肉鸽层：稀有度分层、保底，以及全部非普通牌。
-  /// 战役只有五次选择机会，质变与代价都来不及展开反而会搅乱那条紧凑的
-  /// 成长线，所以默认关闭——候选池与稀有度权重都和改造前逐字一致。
+  /// 战役默认关闭（十三关共 12 次选择，次数上已经够分层展开）——是否
+  /// 把肉鸽层开放给战役是独立的数值决策，动它之前先跑
+  /// `tool/balance_report.dart` 对比三流通关率，别只看"次数够了"。
   static List<Upgrade> roll({
     required PlayerProfile profile,
     required Map<String, int> taken,

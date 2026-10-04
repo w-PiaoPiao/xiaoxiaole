@@ -9,8 +9,9 @@ import 'upgrade_art.dart';
 
 /// 暂停菜单：进度概览、关卡选择（战役）、设置开关与常用操作。
 ///
-/// 游戏本身没有实时压力（敌人按回合出手而不是按秒），所以"暂停"在这里
-/// 等价于"打开菜单时输入被屏蔽"——棋盘与战斗都停在原地。
+/// 注意这**不是硬暂停**：打开菜单只是屏蔽输入，在飞的连锁演出与敌方回合
+/// 仍会在遮罩后面走完（演出协程没有检查点）。菜单里因此常驻显示当前
+/// [battleStatus]（生命/护盾），别让玩家在不知情里被"盲杀"。
 class MenuOverlay extends StatelessWidget {
   final AppSettings settings;
   final int currentLevel;
@@ -27,6 +28,12 @@ class MenuOverlay extends StatelessWidget {
 
   /// 当前模式的说明文字（如「战役」「无尽 · 第 7 波」），显示在标题旁。
   final String modeLabel;
+
+  /// 战斗进行中的一行状态（如「生命 187/300 · 护盾 40」）。
+  ///
+  /// 菜单不是硬暂停，演出仍在背后走——把这行数字常驻在标题下，
+  /// 玩家打开菜单时也能盯着自己的血线。
+  final String? battleStatus;
 
   /// 清空全部强化、从头开始。
   final VoidCallback onNewRun;
@@ -53,6 +60,7 @@ class MenuOverlay extends StatelessWidget {
     this.taken = const {},
     this.showLevelSelect = true,
     this.modeLabel = '战役',
+    this.battleStatus,
     this.restartLabel = '重开一局',
     this.restartLevelLabel = '重开本关',
     this.onExitToMenu,
@@ -110,6 +118,16 @@ class MenuOverlay extends StatelessWidget {
                           PanelCloseButton(onTap: onResume),
                         ],
                       ),
+                      if (battleStatus != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          battleStatus!,
+                          style: AppText.label.copyWith(
+                            fontSize: 11,
+                            color: Palette.textDim,
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       if (taken.isNotEmpty) ...[
                         const Text('本局强化', style: AppText.label),

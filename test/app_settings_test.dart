@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gem_battle/app_settings.dart';
+import 'package:gem_battle/engine/levels.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -98,10 +99,49 @@ void main() {
       );
       expect(settings.resume, isNotNull);
       settings.clearResume();
+      // 写盘是异步尽力而为的：排空事件队列再读磁盘状态（本文件其余
+      // 用例同此口径）。
+      await pumpEventQueue();
 
       final other = AppSettings();
       await other.load();
       expect(other.resume, isNull);
+    });
+
+    test('战役与无尽各占一个槽，开新局不再冲掉另一边的进度', () async {
+      final settings = AppSettings();
+      await settings.load();
+      settings.saveResume(
+        const ResumeData(
+          mode: GameMode.endless,
+          level: 9,
+          carryHp: 260,
+          upgrades: {'regen': 2},
+        ),
+      );
+      // 单槽时代这里会被"战役第 1 关"静默覆盖且不可恢复。
+      settings.saveResume(
+        const ResumeData(
+          mode: GameMode.campaign,
+          level: 0,
+          carryHp: 300,
+          upgrades: {},
+        ),
+      );
+      await pumpEventQueue();
+
+      final other = AppSettings();
+      await other.load();
+      // 「继续游戏」取两个槽里较新的（战役刚写入）。
+      expect(other.resume!.mode, GameMode.campaign);
+      // 但无尽那局还在，切回无尽能接着打。
+      expect(other.resumeFor(GameMode.endless)!.level, 9);
+      expect(other.resumeFor(GameMode.endless)!.upgrades['regen'], 2);
+      // 战败清档只清本模式，另一边不受牵连。
+      other.clearResume(mode: GameMode.campaign);
+      await pumpEventQueue();
+      expect(other.resumeFor(GameMode.campaign), isNull);
+      expect(other.resumeFor(GameMode.endless)!.level, 9);
     });
   });
 
@@ -219,9 +259,15 @@ void main() {
 
       final prefs = await SharedPreferences.getInstance();
       expect(
-        prefs.getKeys().any((key) => key.startsWith('progress.resume.')),
-        isFalse,
-        reason: '旧格式的散键要清干净',
+        prefs.getKeys().where(
+          (key) =>
+              key.startsWith('progress.resume.') &&
+              key != 'progress.resume.campaign' &&
+              key != 'progress.resume.endless' &&
+              key != 'progress.resume',
+        ),
+        isEmpty,
+        reason: '旧格式的散键要清干净（新格式的分槽键除外）',
       );
 
       final other = AppSettings();
@@ -257,6 +303,8 @@ void main() {
         ),
       );
       settings.resetProgress();
+      // 写盘是异步尽力而为的：排空事件队列再读磁盘状态。
+      await pumpEventQueue();
 
       final other = AppSettings();
       await other.load();
@@ -270,7 +318,7 @@ void main() {
     test('通关一关：解锁下一关并记录星级与回合数', () async {
       final settings = AppSettings();
       await settings.load();
-      settings.recordClear(levelIndex: 0, stars: 2, turns: 12, levelCount: 6);
+      settings.recordClear(levelIndex: 0, stars: 2, turns: 12, levelCount: Campaign.levels.length);
 
       expect(settings.unlockedLevel, 1);
       expect(settings.starsOf(0), 2);
@@ -286,8 +334,8 @@ void main() {
     test('星级只升不降，回合数只记更少的', () async {
       final settings = AppSettings();
       await settings.load();
-      settings.recordClear(levelIndex: 0, stars: 3, turns: 10, levelCount: 6);
-      settings.recordClear(levelIndex: 0, stars: 1, turns: 20, levelCount: 6);
+      settings.recordClear(levelIndex: 0, stars: 3, turns: 10, levelCount: Campaign.levels.length);
+      settings.recordClear(levelIndex: 0, stars: 1, turns: 20, levelCount: Campaign.levels.length);
 
       expect(settings.starsOf(0), 3, reason: '更差的成绩不该覆盖最佳');
       expect(settings.turnsOf(0), 10);
@@ -296,8 +344,8 @@ void main() {
     test('打出更好成绩时刷新纪录', () async {
       final settings = AppSettings();
       await settings.load();
-      settings.recordClear(levelIndex: 1, stars: 1, turns: 30, levelCount: 6);
-      settings.recordClear(levelIndex: 1, stars: 3, turns: 14, levelCount: 6);
+      settings.recordClear(levelIndex: 1, stars: 1, turns: 30, levelCount: Campaign.levels.length);
+      settings.recordClear(levelIndex: 1, stars: 3, turns: 14, levelCount: Campaign.levels.length);
 
       expect(settings.starsOf(1), 3);
       expect(settings.turnsOf(1), 14);
@@ -306,10 +354,11 @@ void main() {
     test('最后一关通关不会把解锁数推过界', () async {
       final settings = AppSettings();
       await settings.load();
-      settings.recordClear(levelIndex: 5, stars: 3, turns: 9, levelCount: 6);
+      final last = Campaign.levels.length - 1;
+      settings.recordClear(levelIndex: last, stars: 3, turns: 9, levelCount: Campaign.levels.length);
 
-      expect(settings.unlockedLevel, 0, reason: '没有第 7 关可以解锁');
-      expect(settings.starsOf(5), 3, reason: '但这一关的战绩照记');
+      expect(settings.unlockedLevel, 0, reason: '没有下一关可以解锁');
+      expect(settings.starsOf(last), 3, reason: '但这一关的战绩照记');
       expect(settings.hasProgress, isTrue);
     });
   });

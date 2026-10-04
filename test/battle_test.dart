@@ -11,6 +11,33 @@ BattleState newBattle(int level) =>
 void main() {
   final def = Campaign.levels[0].enemy;
 
+  /// 构造一位带技能的测试角色。turnsPerAttack=1：每个玩家回合结束她就
+  /// 出手一次，skillEvery 控制技能节奏，用例不必拖很多回合。
+  EnemyDef skillBoss(
+    EnemySkill skill, {
+    int skillEvery = 2,
+    int attack = 100,
+    int phases = 1,
+  }) => EnemyDef(
+    id: 'test_skill',
+    name: '试炼技能者',
+    title: '无',
+    story: '测试用的技能剪影。',
+    taunt: '「看招。」',
+    archetype: EnemyArchetype.moonPriestess,
+    maxHp: 1000,
+    attack: attack,
+    turnsPerAttack: 1,
+    skill: skill,
+    skillEvery: skillEvery,
+    phases: phases,
+    themeColor: 0xFF9FD8FF,
+  );
+
+  /// 出厂 300 血撑不过三下 100 攻击——多回合的技能用例在每一步前
+  /// 把玩家血补满，读数只关心技能本身，不关心玩家的死活。
+  void revivePlayer(BattleState state) => state.playerHp = state.profile.maxHp;
+
   group('宝石效果', () {
     test('红色宝石按基础伤害与连击倍率扣血', () {
       final state = newBattle(0);
@@ -129,7 +156,7 @@ void main() {
 
   group('敌方攻击预警', () {
     test('重击被单次伤害上限截断，预警与实际伤害完全一致', () {
-      // 第五关的魔女：攻击 170、每 3 次一记 1.8 倍重击 —— 重击本身会顶穿
+      // 第五战的魅魔夜歌：攻击 170、每 3 次一记 1.8 倍重击 —— 重击会顶穿
       // 「单次伤害不超过最大生命 65%」的封顶，预警必须按封顶后的值报。
       final state = BattleState(def: Campaign.levels[4].enemy, levelIndex: 4);
       state.attackCount = 2; // 下一次（第 3 次）就是重击
@@ -188,7 +215,7 @@ void main() {
 
       final events = state.endPlayerTurn();
       expect(events.any((e) => e.kind == CombatEventKind.enemyAttack), isTrue);
-      // 第一关的攻击（62 点）全部被 100 点护盾吸收
+      // 第一关妖精的攻击全部被护盾吸收
       expect(state.shield, 100 - def.attack);
       expect(state.playerHp, Campaign.player.maxHp);
       expect(state.turnsToAttack, def.turnsPerAttack, reason: '攻击后重新计时');
@@ -576,33 +603,6 @@ void main() {
   });
 
   group('专属技能', () {
-    /// 构造一位带技能的测试角色。turnsPerAttack=1：每个玩家回合结束她就
-    /// 出手一次，skillEvery 控制技能节奏，用例不必拖很多回合。
-    EnemyDef skillBoss(
-      EnemySkill skill, {
-      int skillEvery = 2,
-      int attack = 100,
-      int phases = 1,
-    }) => EnemyDef(
-      id: 'test_skill',
-      name: '试炼技能者',
-      title: '无',
-      story: '测试用的技能剪影。',
-      taunt: '「看招。」',
-      archetype: EnemyArchetype.moonPriestess,
-      maxHp: 1000,
-      attack: attack,
-      turnsPerAttack: 1,
-      skill: skill,
-      skillEvery: skillEvery,
-      phases: phases,
-      themeColor: 0xFF9FD8FF,
-    );
-
-    /// 出厂 300 血撑不过她的三下 100 攻击——多回合的技能用例在每一步前
-    /// 把玩家血补满，读数只关心技能本身，不关心玩家的死活。
-    void revivePlayer(BattleState state) => state.playerHp = state.profile.maxHp;
-
     test('技能回合有预警，且预警包含影分身的追加段', () {
       final def = skillBoss(
         const EnemySkill(name: '影分身', kind: EnemySkillKind.shadowStrike, ratio: 0.5),
@@ -794,10 +794,271 @@ void main() {
           if (level.enemy.skill case final skill?) skill.kind,
       ];
       expect(skills.length, 13, reason: '每位美少女都有一个专属技能');
-      expect(skills.toSet().length, lessThan(13), reason: '允许复用机制，但下面的去重口径要心里有数');
+      // 复用机制是刻意的（9 种技能 13 个人），不做反向断言——将来
+      // "13 人 13 技"是合理演进，不该被测试拦住。
+      expect(skills.toSet().length, lessThan(13));
       // 终战与龙女必须带硬机制：贯穿与咒毒是她们人设的战斗面。
       expect(Campaign.levels[11].enemy.skill!.kind, EnemySkillKind.crush);
       expect(Campaign.levels[12].enemy.skill!.kind, EnemySkillKind.hex);
+    });
+  });
+
+  group('消耗战（僵持）机制', () {
+    EnemyDef attritionBoss({double ramp = 0.12, int attack = 10}) =>
+        EnemyDef(
+          id: 'test_attrition',
+          name: '僵持试炼者',
+          title: '无',
+          story: '测试用的时间压力剪影。',
+          taunt: '「时间站在我这边。」',
+          archetype: EnemyArchetype.witch,
+          maxHp: 999999,
+          attack: attack,
+          turnsPerAttack: 1,
+          attritionRamp: ramp,
+          themeColor: 0xFFB44BFF,
+        );
+
+    test('100 回合内预警与实伤都还没有惩罚', () {
+      final state = BattleState(def: attritionBoss(), levelIndex: 0);
+      state.playerTurns = BattleState.attritionStartTurn - 2;
+      expect(state.incomingDamage, 10);
+      state.endPlayerTurn();
+      expect(Campaign.player.maxHp - state.playerHp, 10);
+    });
+
+    test('台阶跨越的那一击：预警按出手时刻推倍率，与实伤一致', () {
+      // 玩家回合中 playerTurns=99：这一击落在本回合末（回合数先 ++ 到
+      // 100 再结算敌人），倍率恰好在它身上跨过 1.0 → 1.12 的台阶。
+      // 预警若按当前回合数推，会少报整整 12%——玩家按预警留的血
+      // 正好被这一击收走。
+      final state = BattleState(def: attritionBoss(), levelIndex: 0);
+      state.playerTurns = BattleState.attritionStartTurn - 1;
+      final predicted = state.incomingDamage;
+      expect(predicted, (10 * 1.12).round());
+      state.endPlayerTurn();
+      expect(
+        Campaign.player.maxHp - state.playerHp,
+        predicted,
+        reason: '预警写着多少，落下来就该是多少（含僵持台阶）',
+      );
+      expect(state.playerTurns, BattleState.attritionStartTurn);
+    });
+
+    test('僵持惩罚乘在封顶之后：能穿透受击上限', () {
+      // 攻击 10 万：65% 封顶先把单次伤害按在 195，1.5 倍惩罚乘在封顶
+      // 之后——实际掉血必须超过 65% 上限，否则"打不动"的对局又回来了。
+      final state = BattleState(def: attritionBoss(ramp: 0.5, attack: 100000), levelIndex: 0);
+      state.playerTurns = BattleState.attritionStartTurn; // 倍率 1.5
+      final cap = (Campaign.player.maxHp * BattleState.singleHitCapRatio).round();
+      state.endPlayerTurn();
+      final lost = Campaign.player.maxHp - state.playerHp;
+      expect(
+        lost,
+        greaterThan(cap),
+        reason: '封顶保护的是"减伤前"的天花板，僵持惩罚要能穿过去',
+      );
+      expect(lost, lessThanOrEqualTo(Campaign.player.maxHp));
+    });
+  });
+
+  group('多管血与结算边界', () {
+    test('打空一管的那一击不会先闪假「狂暴」', () {
+      // 破管瞬间 enemyHp==0，狂暴要在新形态满血下重新判定——否则
+      // 事件流里先闪一条"狂暴"再播转形态，演出自相矛盾。
+      const def = EnemyDef(
+        id: 'test_phase_enrage',
+        name: '破管试炼者',
+        title: '无',
+        story: '测试用的转形态剪影。',
+        taunt: '「再来。」',
+        archetype: EnemyArchetype.moonPriestess,
+        maxHp: 100,
+        phases: 2,
+        attack: 100,
+        turnsPerAttack: 1,
+        enrageAt: 0.35,
+        skill: EnemySkill(name: '自愈', kind: EnemySkillKind.sprout, ratio: 0.1),
+        skillEvery: 99,
+        themeColor: 0xFF9FD8FF,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      state.enemyHp = 50;
+      final events = state.applyClear({GemType.red: 60}, combo: 1);
+      expect(
+        events.where((e) => e.kind == CombatEventKind.enrage),
+        isEmpty,
+        reason: 'enemyHp==0 时狂暴判定必须让位给转形态',
+      );
+      expect(state.phaseIndex, 2);
+      expect(state.enraged, isFalse);
+    });
+
+    test('荆棘反弹不能把败局翻成"同归于尽算赢"', () {
+      // 玩家死于这一击时不再反弹："玩家先死判负"以 _enemyAct 末行的
+      // playerHp 判定为权威，反弹（可能触发 _damageEnemy 置 won）排在
+      // 它前面——没有 playerHp>0 守卫的话，行序一重排结局就会翻转。
+      // 数值精心凑过：单次伤害被 65% 封顶按在 195 以内，盾 40 吸收 40、
+      // 玩家只剩 150 血（掉 155 → 死），反弹的 40 恰好打死 40 血的敌人
+      // ——修复前这就是一局"同归于尽算赢"。
+      final profile = Campaign.player.copyWith(
+        effects: Campaign.player.effects.copyWith(shieldReflect: 1.0),
+      );
+      const def = EnemyDef(
+        id: 'test_thorns_fall',
+        name: '荆棘试炼者',
+        title: '无',
+        story: '测试用的反弹剪影。',
+        taunt: '「一起倒下吧。」',
+        archetype: EnemyArchetype.moonPriestess,
+        maxHp: 40,
+        attack: 700,
+        turnsPerAttack: 1,
+        themeColor: 0xFF9FD8FF,
+      );
+      final state = BattleState(
+        def: def,
+        levelIndex: 0,
+        profile: profile,
+        playerHp: 150,
+      );
+      state.shield = 40;
+      state.endPlayerTurn();
+      expect(state.phase, BattlePhase.lost);
+      expect(
+        state.enemyHp,
+        def.maxHp,
+        reason: '人已经倒下，荆棘不再扎针',
+      );
+    });
+
+    test('终战四管逐管变凶', () {
+      final def = Campaign.levels[12].enemy;
+      // 用厚血玩家把 65% 封顶抬出攻击力范围，否则形态递增会被封顶盖住。
+      final profile = Campaign.player.copyWith(maxHp: 1000);
+      final strikes = <int>[
+        for (var phase = 1; phase <= def.phases; phase++)
+          (BattleState(def: def, levelIndex: 12, profile: profile)
+                ..phaseIndex = phase
+                ..attackCount = 0 // 下一次出手（第 1 次）是普通攻击
+              )
+              .incomingDamage,
+      ];
+      expect(strikes.length, 4);
+      expect(strikes[0], lessThan(strikes[1]));
+      expect(strikes[1], lessThan(strikes[2]));
+      expect(strikes[2], lessThan(strikes[3]),
+          reason: '每管形态按 phaseAttackGrowth 递增，终战要越打越紧');
+    });
+  });
+
+  group('专属技能边界', () {
+    test('影分身追加段可以被护盾挡下', () {
+      final def = skillBoss(
+        const EnemySkill(name: '影分身', kind: EnemySkillKind.shadowStrike, ratio: 0.5),
+        skillEvery: 1,
+        attack: 100,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      state.shield = 200;
+      revivePlayer(state);
+      state.endPlayerTurn(); // 主段 100 全挡，追加段 50 由剩余 100 挡下
+      expect(state.shield, 50);
+      expect(state.playerHp, state.profile.maxHp);
+    });
+
+    test('魅惑在玩家没有护盾时安静跳过', () {
+      final def = skillBoss(
+        const EnemySkill(name: '魅惑', kind: EnemySkillKind.charm, ratio: 0.5),
+        skillEvery: 1,
+        attack: 10,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      revivePlayer(state);
+      final events = state.endPlayerTurn();
+      expect(events.where((e) => e.kind == CombatEventKind.charm), isEmpty);
+      expect(state.enemyShield, 0);
+    });
+
+    test('月蚀在玩家没有怒气时无可偷', () {
+      final def = skillBoss(
+        const EnemySkill(name: '月蚀', kind: EnemySkillKind.eclipse, amount: 20),
+        skillEvery: 1,
+        attack: 10,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      state.rage = 0;
+      revivePlayer(state);
+      final events = state.endPlayerTurn();
+      expect(events.where((e) => e.kind == CombatEventKind.rageDrain), isEmpty);
+      expect(state.rage, 0);
+    });
+
+    test('咒毒重复命中按刷新处理：数值覆盖、回合重置', () {
+      final def = skillBoss(
+        const EnemySkill(name: '咒毒', kind: EnemySkillKind.hex, amount: 26, turns: 3),
+        skillEvery: 1,
+        attack: 10,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      state.poisonTurns = 1;
+      state.poisonDamage = 5;
+      revivePlayer(state);
+      state.endPlayerTurn(); // 旧毒先 tick（1→0，扣 5），新毒覆盖
+      expect(state.poisonDamage, 26);
+      expect(state.poisonTurns, 3);
+    });
+
+    test('过载叠层封顶 5 层', () {
+      final def = skillBoss(
+        const EnemySkill(name: '过载', kind: EnemySkillKind.surge, ratio: 0.1),
+        skillEvery: 1,
+        attack: 10,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      for (var i = 0; i < 8; i++) {
+        revivePlayer(state);
+        state.endPlayerTurn();
+      }
+      expect(state.enemyPowerStacks, 5, reason: '封顶防止攻击被无限抬高');
+    });
+
+    test('冰甲/圣壁的护盾封顶为每管血的三分之一', () {
+      final def = skillBoss(
+        const EnemySkill(name: '圣壁', kind: EnemySkillKind.barrier, ratio: 0.5),
+        skillEvery: 1,
+        attack: 10,
+      );
+      final state = BattleState(def: def, levelIndex: 0);
+      for (var i = 0; i < 3; i++) {
+        revivePlayer(state);
+        state.endPlayerTurn();
+      }
+      expect(state.enemyShield, def.maxHp ~/ 3);
+    });
+
+    test('龙女：重击与贯穿同回合叠加，护盾分毫不动', () {
+      // 龙女 heavyEvery == skillEvery == 3：第 3 次出手既是 1.8 倍重击
+      // 也是贯穿技能——两段倍率相乘还是独立生效？独立：重击倍率在外层，
+      // 贯穿只决定"无视护盾"。
+      final def = Campaign.levels[11].enemy;
+      expect(def.heavyEvery, 3);
+      expect(def.skill!.kind, EnemySkillKind.crush);
+      final profile = Campaign.player.copyWith(maxHp: 1000);
+      final state = BattleState(
+        def: def,
+        levelIndex: 11,
+        profile: profile,
+      );
+      state.attackCount = def.heavyEvery - 1;
+      final predicted = state.incomingDamage;
+      expect(predicted, (def.attack * def.heavyMultiplier).round());
+      state.shield = 99999;
+      state.playerHp = profile.maxHp;
+      state.turnsToAttack = 1; // 龙女 turnsPerAttack=3，直接推到出手
+      state.endPlayerTurn();
+      expect(state.shield, 99999, reason: '贯穿不吃护盾');
+      expect(profile.maxHp - state.playerHp, predicted);
     });
   });
 }

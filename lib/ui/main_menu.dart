@@ -101,8 +101,8 @@ class _MainMenuScreenState extends State<MainMenuScreen> {
                           _MenuTile(
                             label: '战役模式',
                             sub: settings.hasProgress
-                                ? '六场战斗 · 已解锁第 ${settings.unlockedLevel + 1} 关'
-                                : '六场战斗 · 从迷雾到终焉',
+                                ? '${Campaign.levels.length} 场战斗 · 已解锁第 ${settings.unlockedLevel + 1} 关'
+                                : '${Campaign.levels.length} 场战斗 · 从迷雾到终焉',
                             onTap: () => _enter(
                               context,
                               GameScreen(

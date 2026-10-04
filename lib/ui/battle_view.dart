@@ -35,12 +35,9 @@ class BattleView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Color(level.enemy.themeColor);
-    // 这个 widget 重建通常意味着战斗数值变了（血量、狂暴、易伤），而战斗区
-    // 里的角色剪影直接依赖这些数值。它的重绘平时由 fx 的信号驱动，
-    // 「减少动态效果」下那条路径会安静下来——这里补一次重绘，保证数值变化
-    // 一定反映到画面上。
-    fx.battleRepaint.ping();
-    return Stack(
+    return _BattleRepaintPinger(
+      fx: fx,
+      child: Stack(
       fit: StackFit.expand,
       children: [
         // 背景渐变、光晕与暗角是静态的，单独一层，只在换关换色时重绘。
@@ -94,6 +91,7 @@ class BattleView extends StatelessWidget {
             ),
           ),
       ],
+      ),
     );
   }
 
@@ -454,4 +452,32 @@ class _BattlePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _BattlePainter oldDelegate) =>
       oldDelegate.battle != battle || oldDelegate.theme != theme;
+}
+
+/// 每次父级重建时给战斗区重绘信号补一针。
+///
+/// [BattleView] 重建通常意味着战斗数值变了（血量、狂暴、易伤），而它的
+/// 重绘平时由 fx 信号驱动，「减少动态效果」下那条路径会安静下来——补一次
+/// ping 保证数值变化一定反映到画面上。不能直接写在 StatelessWidget 的
+/// build 里（build 中 notifyListeners 会让 setState 型监听者抛框架异常），
+/// 所以包一层 StatefulWidget，把 ping 挪进 [didUpdateWidget]。
+class _BattleRepaintPinger extends StatefulWidget {
+  final FxController fx;
+  final Widget child;
+
+  const _BattleRepaintPinger({required this.fx, required this.child});
+
+  @override
+  State<_BattleRepaintPinger> createState() => _BattleRepaintPingerState();
+}
+
+class _BattleRepaintPingerState extends State<_BattleRepaintPinger> {
+  @override
+  void didUpdateWidget(covariant _BattleRepaintPinger oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget.fx.battleRepaint.ping();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

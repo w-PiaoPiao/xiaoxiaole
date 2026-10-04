@@ -334,6 +334,37 @@ void main() {
       expect(board.hasValidMove(), isFalse);
     });
 
+    test('真死盘上放一颗线宝石不会被误判成有解', () {
+      // 经典规则下，单颗线/爆裂宝石与普通宝石的交换仍要拼出三连。
+      // hasValidMove 若见强化宝石就短路放行，会把这种盘误报成有解——
+      // 自动洗牌不触发、玩家每一步都被拒绝，只能靠锤子自救。
+      final board = BoardEngine.fromLayout(deadLayout());
+      final i = board.index(0, 0);
+      board.cells[i] = Gem(
+        id: 9999,
+        type: GemType.yellow, // 死图案只有 R/B/G，黄色拼不出任何三连
+        special: SpecialKind.lineV,
+      );
+      expect(board.hasValidMove(), isFalse);
+    });
+
+    test('clone 不消耗母盘的随机序列（同种子可复现）', () {
+      // 落子顾问一回合要克隆几十次；克隆若从母盘 rng 抽种子，母盘的
+      // 补位序列就会跟着"按没按提示"漂移，同种子不再复现同一盘。
+      final a = BoardEngine(seed: 7)..reset();
+      final b = BoardEngine(seed: 7)..reset();
+      for (var i = 0; i < 5; i++) {
+        a.clone();
+      }
+      a.resolveSingleClear(0);
+      b.resolveSingleClear(0);
+      expect(
+        [for (final g in a.snapshot()) g.type],
+        [for (final g in b.snapshot()) g.type],
+        reason: '克隆 5 次后再走同一步，两个盘必须演化出同一个结果',
+      );
+    });
+
     test('洗牌后恢复成可玩状态', () {
       final board = BoardEngine.fromLayout(deadLayout());
       board.shuffleBoard();

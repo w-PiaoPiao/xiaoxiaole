@@ -77,16 +77,40 @@ class _BoardViewState extends State<BoardView> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    // 棋盘用独立的绘制信号（见 FxController.boardRepaint）：没有东西在动时
-    // 它一帧都不重画。外层套 RepaintBoundary，这样战斗区那侧的逐帧重绘
-    // 不会把棋盘一起拖下水。
+  void initState() {
+    super.initState();
+    _syncBoardPulse();
+  }
+
+  @override
+  void didUpdateWidget(BoardView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 只在影响重绘信号的输入变化时同步。不能放 build 里写：build 中
+    // notifyListeners 会让将来任何挂到该信号上的 setState 型监听者在
+    // build 阶段抛框架异常（当前只有 CustomPainter 的 repaint 通道在听）。
+    if (oldWidget.selected != widget.selected ||
+        oldWidget.hintA != widget.hintA ||
+        oldWidget.hintB != widget.hintB ||
+        oldWidget.aimingUltimate != widget.aimingUltimate ||
+        oldWidget.itemTargeting != widget.itemTargeting) {
+      _syncBoardPulse();
+    }
+  }
+
+  void _syncBoardPulse() {
     widget.fx.boardPulse =
         widget.selected != null ||
         widget.hintA != null ||
         widget.hintB != null ||
         widget.aimingUltimate ||
         widget.itemTargeting;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 棋盘用独立的绘制信号（见 FxController.boardRepaint）：没有东西在动时
+    // 它一帧都不重画。外层套 RepaintBoundary，这样战斗区那侧的逐帧重绘
+    // 不会把棋盘一起拖下水。
     return LayoutBuilder(
       builder: (context, constraints) {
         final side = math.min(constraints.maxWidth, constraints.maxHeight);
@@ -493,7 +517,8 @@ class _BoardPainter extends CustomPainter {
 
     // 建议落点：画在宝石之上，用金色边框 + 淡金底把两颗宝石整个框出来。
     // 画在下层时只露出格子边缘的一圈，在密集的棋盘上几乎看不见。
-    if (!aimingUltimate && (hintA != null || hintB != null)) {
+    // 锤子瞄准时不画：取景框和提示金框叠在彼此身上，看不出哪边是哪边。
+    if (!aimingUltimate && !itemTargeting && (hintA != null || hintB != null)) {
       final pulse = 0.5 + 0.5 * math.sin(fx.time * 6);
       _paintHint(canvas, cell, stroke, hintA, pulse);
       _paintHint(canvas, cell, stroke, hintB, pulse);

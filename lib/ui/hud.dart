@@ -354,6 +354,15 @@ class _ActionButtonState extends State<ActionButton> {
   }
 
   @override
+  void didUpdateWidget(covariant ActionButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 按住期间按钮被禁用（另一根手指触发了交换）：onTapUp/onTapCancel 已经
+    // 变成 null，松手不会再有回调来复位——就地复位，否则 AnimatedScale
+    // 会一直卡在按下态直到下一次交互。
+    if (!widget.enabled && _pressed) _setPressed(false);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final enabled = widget.enabled;
     final color = widget.color;

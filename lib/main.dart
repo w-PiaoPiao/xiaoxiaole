@@ -10,6 +10,22 @@ import 'ui/sfx.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // build/布局异常的兜底画面：默认的灰底红字与深色游戏格格不入，也没有
+  // 任何出路。给一个主题一致的深色页——战斗流程内部的容错已经很完备，
+  // 这一层只管兜住框架级异常。
+  ErrorWidget.builder = (details) => DecoratedBox(
+    decoration: const BoxDecoration(color: Palette.bgDeep),
+    child: Padding(
+      padding: const EdgeInsets.all(36),
+      child: Center(
+        child: Text(
+          '画面出了点问题，请退出重进。\n\n${details.exceptionAsString()}',
+          style: const TextStyle(color: Palette.textDim, fontSize: 12),
+          textAlign: TextAlign.center,
+        ),
+      ),
+    ),
+  );
   // 竖屏单手游玩：锁定竖屏并进入沉浸式全屏。
   //
   // 刻意不 await：平台通道偶尔失败（模拟器、桌面调试环境）不该拦下启动，
